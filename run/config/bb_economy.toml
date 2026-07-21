@@ -1,0 +1,41 @@
+
+[database]
+	#Adresse du serveur MariaDB
+	host = "localhost"
+	#Port MariaDB
+	#Range: 1 ~ 65535
+	port = 3306
+	#Nom de la base de donnees
+	name = "bb_economy"
+	#Utilisateur MariaDB
+	user = "root"
+	#Mot de passe MariaDB
+	password = "password"
+
+[economy]
+	#Argent sur le compte bancaire a la creation du compte joueur
+	#Range: 0.0 ~ 1.0E9
+	startingBankBalance = 100.0
+	#Nombre de billets donnes au joueur lors de son premier spawn
+	#Range: > 0
+	startingCashInInventory = 0
+	#Donner un portefeuille au premier spawn du joueur
+	giveStarterWallet = true
+	#Donner et creer une carte bancaire au premier spawn du joueur
+	giveStarterCard = true
+	#Code PIN par defaut des nouvelles cartes bancaires
+	#Range: 0 ~ 9999
+	defaultCardPin = 0
+	#Montant maximum depose par joueur sur une journee in-game
+	#Range: 0.0 ~ 1.0E9
+	dailyDepositLimit = 10000.0
+	#Montant maximum retire par joueur sur une journee in-game
+	#Range: 0.0 ~ 1.0E9
+	dailyWithdrawLimit = 10000.0
+	#Montant maximum vire depuis un compte personnel sur une journee in-game
+	#Range: 0.0 ~ 1.0E9
+	dailyTransferLimit = 10000.0
+	#Capacite maximale d'un portefeuille en billets
+	#Range: > 1
+	walletMaxStoredMoney = 10000
+

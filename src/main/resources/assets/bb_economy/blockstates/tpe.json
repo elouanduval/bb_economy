@@ -1,0 +1,8 @@
+{
+  "variants": {
+    "facing=north": { "model": "bb_economy:block/tpe" },
+    "facing=south": { "model": "bb_economy:block/tpe", "y": 180 },
+    "facing=west":  { "model": "bb_economy:block/tpe", "y": 90 },
+    "facing=east":  { "model": "bb_economy:block/tpe", "y": 270 }
+  }
+}
