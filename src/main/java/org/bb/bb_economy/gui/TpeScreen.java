@@ -174,7 +174,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
 
         validateButton.active = false;
         setMessage("Paiement en cours...", 0xAAAAAA);
-        ModNetworking.CHANNEL.sendToServer(new TpePaymentPacket(handler.getPos()));
+        ModNetworking.CHANNEL.sendToServer(new TpePaymentPacket(handler.getPos(), currentAmount.toPlainString()));
     }
 
     private BigDecimal parseAmount() {
@@ -223,7 +223,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         ModNetworking.CHANNEL.sendToServer(new PinCheckPacket(pin));
     }
 
-    public void onPinResponse(boolean success) {
+    public void onPinResponse(boolean success, String responseMessage) {
         if (!isBuyerMode()) {
             return;
         }
@@ -236,7 +236,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         } else {
             buyerPinValidated = false;
             pinInput.setLength(0);
-            setMessage("PIN incorrect.", 0xFF4444);
+            setMessage(responseMessage, 0xFF4444);
         }
     }
 

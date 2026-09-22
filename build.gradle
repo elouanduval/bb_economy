@@ -110,3 +110,14 @@ tasks.named('jar', Jar).configure {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
 }
+
+dependencies {
+    // Tests du coeur monetaire (BankLedger) sur une base H2 en memoire, sans Minecraft.
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.10.2'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.2'
+    testImplementation 'com.h2database:h2:2.2.224'
+}
+
+tasks.named('test', Test).configure {
+    useJUnitPlatform()
+}

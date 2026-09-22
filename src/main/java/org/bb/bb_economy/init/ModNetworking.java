@@ -18,7 +18,7 @@ import org.bb.bb_economy.network.TpeSetAmountResponsePacket;
 
 public class ModNetworking {
 
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "2";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.tryParse("bb_economy:main"),

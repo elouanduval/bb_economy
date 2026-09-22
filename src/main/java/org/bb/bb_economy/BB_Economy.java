@@ -1,6 +1,7 @@
 package org.bb.bb_economy;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.logging.LogUtils;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -32,12 +33,16 @@ import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.item.TpeItem;
 import org.bb.bb_economy.network.OpenPinSetupPacket;
 
+import org.slf4j.Logger;
+
 import java.util.List;
 
 @Mod(BB_Economy.MODID)
 public class BB_Economy {
 
     public static final String MODID = "bb_economy";
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     public BB_Economy() {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
@@ -55,7 +60,7 @@ public class BB_Economy {
 
         ClientSetup.init();
 
-        System.out.println("[BB Economy] Mod charge !");
+        LOGGER.info("Mod charge.");
     }
 
     public static class ForgeEvents {
@@ -75,7 +80,7 @@ public class BB_Economy {
         @SubscribeEvent
         public void onServerStarting(ServerStartingEvent event) {
             DatabaseManager.init();
-            System.out.println("[BB Economy] BDD initialisee.");
+            LOGGER.info("BDD initialisee.");
         }
 
         @SubscribeEvent
@@ -87,18 +92,22 @@ public class BB_Economy {
         public void onPlayerLogin(PlayerEvent.PlayerLoggedInEvent event) {
             Player player = event.getEntity();
             if (!player.level().isClientSide() && player instanceof ServerPlayer serverPlayer) {
-
-                // Vérifie si le joueur a un profil actif et une carte avec PIN par défaut
-                if (BankManager.hasActiveProfile(player) && BankManager.hasDefaultCardPin(player)) {
-                    player.displayClientMessage(
-                            Component.literal("Definissez maintenant le code PIN de votre carte bancaire."),
-                            false
-                    );
-                    ModNetworking.CHANNEL.sendTo(
-                            new OpenPinSetupPacket(),
-                            serverPlayer.connection.connection,
-                            net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
-                    );
+                // Une base indisponible ne doit jamais empecher un joueur de se connecter.
+                try {
+                    // Verifie si le joueur a un profil actif et une carte avec PIN par defaut
+                    if (BankManager.hasActiveProfile(player) && BankManager.hasDefaultCardPin(player)) {
+                        player.displayClientMessage(
+                                Component.literal("Definissez maintenant le code PIN de votre carte bancaire."),
+                                false
+                        );
+                        ModNetworking.CHANNEL.sendTo(
+                                new OpenPinSetupPacket(),
+                                serverPlayer.connection.connection,
+                                net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
+                        );
+                    }
+                } catch (RuntimeException e) {
+                    LOGGER.error("Verification du PIN a la connexion impossible pour {}", player.getName().getString(), e);
                 }
             }
         }

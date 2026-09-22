@@ -10,9 +10,9 @@ public class ClientPacketHandler {
     public static void handlePinResponse(PinResponsePacket packet) {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         if (mc.screen instanceof org.bb.bb_economy.gui.AtmScreen atmScreen) {
-            atmScreen.onPinResponse(packet.success, packet.balance);
+            atmScreen.onPinResponse(packet.success, packet.balance, packet.message);
         } else if (mc.screen instanceof org.bb.bb_economy.gui.TpeScreen tpeScreen) {
-            tpeScreen.onPinResponse(packet.success);
+            tpeScreen.onPinResponse(packet.success, packet.message);
         }
     }
 

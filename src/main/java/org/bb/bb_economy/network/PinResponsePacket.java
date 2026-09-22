@@ -11,19 +11,22 @@ public class PinResponsePacket {
 
     final boolean success;
     final double balance;
+    final String message;
 
-    public PinResponsePacket(boolean success, double balance) {
+    public PinResponsePacket(boolean success, double balance, String message) {
         this.success = success;
         this.balance = balance;
+        this.message = message;
     }
 
     public static void encode(PinResponsePacket packet, FriendlyByteBuf buf) {
         buf.writeBoolean(packet.success);
         buf.writeDouble(packet.balance);
+        buf.writeUtf(packet.message);
     }
 
     public static PinResponsePacket decode(FriendlyByteBuf buf) {
-        return new PinResponsePacket(buf.readBoolean(), buf.readDouble());
+        return new PinResponsePacket(buf.readBoolean(), buf.readDouble(), buf.readUtf(256));
     }
 
     public static void handle(PinResponsePacket packet, Supplier<NetworkEvent.Context> ctx) {

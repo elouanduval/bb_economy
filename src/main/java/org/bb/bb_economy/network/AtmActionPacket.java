@@ -1,16 +1,23 @@
 package org.bb.bb_economy.network;
 
+import com.mojang.logging.LogUtils;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
 import org.bb.bb_economy.database.BankManager;
+import org.bb.bb_economy.database.Money;
+import org.bb.bb_economy.database.TxResult;
 import org.bb.bb_economy.gui.AtmScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
+import org.slf4j.Logger;
 
 import java.math.BigDecimal;
 import java.util.function.Supplier;
 
 public class AtmActionPacket {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final int MAX_ACCOUNT_LENGTH = 20;
 
     public enum ActionType {
         DEPOSIT,
@@ -48,96 +55,106 @@ public class AtmActionPacket {
             if (player == null) {
                 return;
             }
-            if (!(player.containerMenu instanceof AtmScreenHandler atmMenu) || !atmMenu.stillValid(player)) {
-                sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Session ATM invalide.");
-                return;
-            }
-            if (!atmMenu.isPinValidated()) {
-                sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "PIN ATM non valide.");
-                return;
-            }
-
-            boolean success = false;
-            String message;
-
-            BigDecimal amount;
             try {
-                amount = new BigDecimal(packet.amount);
-            } catch (NumberFormatException e) {
-                sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Montant invalide.");
-                return;
+                process(player, packet);
+            } catch (RuntimeException e) {
+                LOGGER.error("Erreur pendant une operation ATM de {}", player.getName().getString(), e);
+                sendResponse(player, false, "Service bancaire indisponible. Reessayez plus tard.");
             }
-
-            if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-                sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Montant invalide.");
-                return;
-            }
-
-            switch (packet.actionType) {
-                case DEPOSIT -> {
-                    if (amount.stripTrailingZeros().scale() > 0) {
-                        sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Le depot doit etre un montant entier.");
-                        return;
-                    }
-                    message = BankManager.validateDeposit(player, amount);
-                    if (message != null) {
-                        sendResponse(player, false, BankManager.getBalance(player).doubleValue(), message);
-                        return;
-                    }
-                    success = BankManager.deposit(player, amount);
-                    message = success ? "Depot effectue." : "Pas assez de billets.";
-                }
-                case WITHDRAW -> {
-                    if (amount.stripTrailingZeros().scale() > 0) {
-                        sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Le retrait doit etre un montant entier.");
-                        return;
-                    }
-                    message = BankManager.validateWithdraw(player, amount);
-                    if (message != null) {
-                        sendResponse(player, false, BankManager.getBalance(player).doubleValue(), message);
-                        return;
-                    }
-                    success = BankManager.withdraw(player, amount);
-                    message = success ? "Retrait effectue." : "Solde insuffisant.";
-                }
-                case TRANSFER -> {
-                    if (packet.targetAccount == null || packet.targetAccount.isBlank()) {
-                        sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Numero de compte vide.");
-                        return;
-                    }
-                    String targetAccount = normalizeAccountNumber(packet.targetAccount);
-                    message = BankManager.validateTransfer(player, amount);
-                    if (message != null) {
-                        sendResponse(player, false, BankManager.getBalance(player).doubleValue(), message);
-                        return;
-                    }
-                    success = BankManager.transfer(player, targetAccount, amount);
-                    message = success ? "Virement effectue." : "Virement impossible.";
-                }
-                default -> {
-                    sendResponse(player, false, BankManager.getBalance(player).doubleValue(), "Operation inconnue.");
-                    return;
-                }
-            }
-
-            sendResponse(player, success, BankManager.getBalance(player).doubleValue(), message);
         });
         ctx.get().setPacketHandled(true);
     }
 
-    private static void sendResponse(ServerPlayer player, boolean success, double balance, String message) {
+    private static void process(ServerPlayer player, AtmActionPacket packet) {
+        if (!(player.containerMenu instanceof AtmScreenHandler atmMenu) || !atmMenu.stillValid(player)) {
+            sendResponse(player, false, "Session ATM invalide.");
+            return;
+        }
+        if (!atmMenu.isPinValidated()) {
+            sendResponse(player, false, "PIN ATM non valide.");
+            return;
+        }
+
+        BigDecimal amount = Money.parsePositive(packet.amount).orElse(null);
+        if (amount == null) {
+            sendResponse(player, false, "Montant invalide.");
+            return;
+        }
+
+        TxResult result;
+        switch (packet.actionType) {
+            case DEPOSIT -> {
+                if (!Money.isWhole(amount)) {
+                    sendResponse(player, false, "Le depot doit etre un montant entier.");
+                    return;
+                }
+                result = BankManager.deposit(player, amount);
+            }
+            case WITHDRAW -> {
+                if (!Money.isWhole(amount)) {
+                    sendResponse(player, false, "Le retrait doit etre un montant entier.");
+                    return;
+                }
+                result = BankManager.withdraw(player, amount);
+            }
+            case TRANSFER -> {
+                String targetAccount = normalizeAccountNumber(packet.targetAccount);
+                if (targetAccount == null) {
+                    sendResponse(player, false, "Numero de compte invalide.");
+                    return;
+                }
+                result = BankManager.transfer(player, targetAccount, amount);
+            }
+            default -> {
+                sendResponse(player, false, "Operation inconnue.");
+                return;
+            }
+        }
+
+        sendResponse(player, result.isOk(), describe(packet.actionType, result));
+    }
+
+    private static String describe(ActionType action, TxResult result) {
+        if (result == TxResult.OK) {
+            return switch (action) {
+                case DEPOSIT -> "Depot effectue.";
+                case WITHDRAW -> "Retrait effectue.";
+                case TRANSFER -> "Virement effectue.";
+            };
+        }
+        if (result == TxResult.LIMIT_REACHED) {
+            return switch (action) {
+                case DEPOSIT -> "Limite de depot journaliere atteinte.";
+                case WITHDRAW -> "Limite de retrait journaliere atteinte.";
+                case TRANSFER -> "Limite de virement journaliere atteinte.";
+            };
+        }
+        return result.message();
+    }
+
+    private static void sendResponse(ServerPlayer player, boolean success, String message) {
         ModNetworking.CHANNEL.sendTo(
-                new AtmActionResponsePacket(success, balance, message),
+                new AtmActionResponsePacket(success, BankManager.balanceOrZero(player).doubleValue(), message),
                 player.connection.connection,
                 net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
         );
     }
 
+    /** Retourne le numero de compte normalise, ou null s'il est vide ou manifestement invalide. */
     private static String normalizeAccountNumber(String rawAccount) {
-        String value = rawAccount.trim().toUpperCase();
-        if (value.startsWith("ACC-")) {
-            return value;
+        if (rawAccount == null) {
+            return null;
         }
-        return "ACC-" + value;
+        String value = rawAccount.trim().toUpperCase();
+        if (value.isEmpty()) {
+            return null;
+        }
+        if (!value.startsWith("ACC-")) {
+            value = "ACC-" + value;
+        }
+        if (value.length() > MAX_ACCOUNT_LENGTH || !value.matches("[A-Z0-9-]+")) {
+            return null;
+        }
+        return value;
     }
 }
