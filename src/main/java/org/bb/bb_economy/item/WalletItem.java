@@ -27,27 +27,28 @@ public class WalletItem extends Item {
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack wallet = player.getItemInHand(hand);
 
+        // Le contenu du portefeuille (de l'argent) n'est modifie que cote serveur : pas de prediction client.
+        if (level.isClientSide) {
+            return InteractionResultHolder.sidedSuccess(wallet, true);
+        }
+
         if (player.isShiftKeyDown()) {
             int extracted = withdrawMoney(player, wallet);
-            if (!level.isClientSide) {
-                if (extracted > 0) {
-                    player.displayClientMessage(Component.literal(extracted + " billet(s) retire(s) du portefeuille."), true);
-                } else {
-                    player.displayClientMessage(Component.literal("Le portefeuille est vide."), true);
-                }
+            if (extracted > 0) {
+                player.displayClientMessage(Component.literal(extracted + " billet(s) retire(s) du portefeuille."), true);
+            } else {
+                player.displayClientMessage(Component.literal("Le portefeuille est vide."), true);
             }
-            return InteractionResultHolder.sidedSuccess(wallet, level.isClientSide);
+            return InteractionResultHolder.sidedSuccess(wallet, false);
         }
 
         int stored = depositMoney(player, wallet);
-        if (!level.isClientSide) {
-            if (stored > 0) {
-                player.displayClientMessage(Component.literal(stored + " billet(s) range(s) dans le portefeuille."), true);
-            } else {
-                player.displayClientMessage(Component.literal("Aucun billet a ranger."), true);
-            }
+        if (stored > 0) {
+            player.displayClientMessage(Component.literal(stored + " billet(s) range(s) dans le portefeuille."), true);
+        } else {
+            player.displayClientMessage(Component.literal("Aucun billet a ranger."), true);
         }
-        return InteractionResultHolder.sidedSuccess(wallet, level.isClientSide);
+        return InteractionResultHolder.sidedSuccess(wallet, false);
     }
 
     @Override
@@ -66,7 +67,8 @@ public class WalletItem extends Item {
     }
 
     private static void setStoredMoney(ItemStack stack, int amount) {
-        stack.getOrCreateTag().putInt(TAG_STORED_MONEY, Math.max(0, Math.min(getMaxStoredMoney(), amount)));
+        // Pas de plafond ici : si la capacite configuree baisse, un portefeuille deja plein garde ses billets.
+        stack.getOrCreateTag().putInt(TAG_STORED_MONEY, Math.max(0, amount));
     }
 
     private int depositMoney(Player player, ItemStack wallet) {

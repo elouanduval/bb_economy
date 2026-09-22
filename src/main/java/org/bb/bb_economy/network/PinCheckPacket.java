@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import com.mojang.logging.LogUtils;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
@@ -7,10 +8,13 @@ import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.gui.AtmScreenHandler;
 import org.bb.bb_economy.gui.TpeScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
+import org.slf4j.Logger;
 
 import java.util.function.Supplier;
 
 public class PinCheckPacket {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     private final int pin;
 
@@ -37,33 +41,38 @@ public class PinCheckPacket {
                 return;
             }
 
-            boolean pinOk = BankManager.checkPin(player, packet.getPin());
-            if (player.containerMenu instanceof AtmScreenHandler atmMenu && atmMenu.stillValid(player)) {
-                atmMenu.setPinValidated(pinOk);
-            } else if (player.containerMenu instanceof TpeScreenHandler tpeMenu
-                    && tpeMenu.stillValid(player)
-                    && tpeMenu.getAccessMode() == TpeScreenHandler.AccessMode.BUYER) {
-                tpeMenu.setPinValidated(pinOk);
-            } else {
-                ModNetworking.CHANNEL.sendTo(
-                        new PinResponsePacket(false, 0),
-                        player.connection.connection,
-                        net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
-                );
+            AtmScreenHandler atmMenu = player.containerMenu instanceof AtmScreenHandler atm && atm.stillValid(player) ? atm : null;
+            TpeScreenHandler tpeMenu = player.containerMenu instanceof TpeScreenHandler tpe
+                    && tpe.stillValid(player)
+                    && tpe.getAccessMode() == TpeScreenHandler.AccessMode.BUYER ? tpe : null;
+            if (atmMenu == null && tpeMenu == null) {
+                sendResponse(player, false, 0, "Aucun terminal ouvert.");
                 return;
             }
 
-            double balance = 0;
-            if (pinOk) {
-                balance = BankManager.getBalance(player).toBigInteger().doubleValue();
+            try {
+                BankManager.PinCheck check = BankManager.checkPin(player, packet.getPin());
+                boolean pinOk = check.isOk();
+                if (atmMenu != null) {
+                    atmMenu.setPinValidated(pinOk);
+                } else {
+                    tpeMenu.setPinValidated(pinOk);
+                }
+                double balance = pinOk ? BankManager.balanceOrZero(player).doubleValue() : 0;
+                sendResponse(player, pinOk, balance, check.message());
+            } catch (RuntimeException e) {
+                LOGGER.error("Erreur pendant la verification du PIN de {}", player.getName().getString(), e);
+                sendResponse(player, false, 0, "Service bancaire indisponible. Reessayez plus tard.");
             }
-
-            ModNetworking.CHANNEL.sendTo(
-                    new PinResponsePacket(pinOk, balance),
-                    player.connection.connection,
-                    net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
-            );
         });
         ctx.get().setPacketHandled(true);
+    }
+
+    private static void sendResponse(ServerPlayer player, boolean success, double balance, String message) {
+        ModNetworking.CHANNEL.sendTo(
+                new PinResponsePacket(success, balance, message),
+                player.connection.connection,
+                net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
+        );
     }
 }

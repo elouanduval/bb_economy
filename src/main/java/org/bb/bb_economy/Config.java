@@ -30,15 +30,15 @@ public class Config {
                     .defineInRange("economy.startingBankBalance", 100.0D, 0.0D, 1_000_000_000.0D);
 
     private static final ForgeConfigSpec.IntValue STARTING_CASH_INVENTORY_VALUE =
-            BUILDER.comment("Nombre de billets donnes au joueur lors de son premier spawn")
+            BUILDER.comment("Nombre de billets donnes au joueur a la creation de son compte bancaire")
                     .defineInRange("economy.startingCashInInventory", 0, 0, Integer.MAX_VALUE);
 
     private static final ForgeConfigSpec.BooleanValue GIVE_STARTER_WALLET_VALUE =
-            BUILDER.comment("Donner un portefeuille au premier spawn du joueur")
+            BUILDER.comment("Donner un portefeuille au joueur a la creation de son compte bancaire")
                     .define("economy.giveStarterWallet", true);
 
     private static final ForgeConfigSpec.BooleanValue GIVE_STARTER_CARD_VALUE =
-            BUILDER.comment("Donner et creer une carte bancaire au premier spawn du joueur")
+            BUILDER.comment("Donner la carte bancaire au joueur a la creation de son compte (sinon : /bb_economy card regive)")
                     .define("economy.giveStarterCard", true);
 
     private static final ForgeConfigSpec.IntValue DEFAULT_CARD_PIN_VALUE =
@@ -69,6 +69,14 @@ public class Config {
             BUILDER.comment("Tick in-game de versement des salaires (0 = 00:00)")
                     .defineInRange("economy.salary.recurrenceTick", 0, 0, 23999);
 
+    private static final ForgeConfigSpec.IntValue PIN_MAX_ATTEMPTS_VALUE =
+            BUILDER.comment("Nombre de PIN errones avant verrouillage temporaire du compte")
+                    .defineInRange("economy.pin.maxAttempts", 3, 1, 100);
+
+    private static final ForgeConfigSpec.IntValue PIN_LOCKOUT_SECONDS_VALUE =
+            BUILDER.comment("Duree du verrouillage (en secondes reelles) apres trop de PIN errones")
+                    .defineInRange("economy.pin.lockoutSeconds", 300, 1, 86_400);
+
     static final ForgeConfigSpec SPEC = BUILDER.build();
 
     public static String DB_HOST;
@@ -87,6 +95,8 @@ public class Config {
     public static int WALLET_MAX_STORED_MONEY;
     public static int SALARY_RECURRENCE_DAYS;
     public static int SALARY_RECURRENCE_TICK;
+    public static int PIN_MAX_ATTEMPTS = 3;
+    public static int PIN_LOCKOUT_SECONDS = 300;
 
     @SubscribeEvent
     static void onLoad(final ModConfigEvent event) {
@@ -106,5 +116,7 @@ public class Config {
         WALLET_MAX_STORED_MONEY = WALLET_MAX_STORED_MONEY_VALUE.get();
         SALARY_RECURRENCE_DAYS = SALARY_RECURRENCE_DAYS_VALUE.get();
         SALARY_RECURRENCE_TICK = SALARY_RECURRENCE_TICK_VALUE.get();
+        PIN_MAX_ATTEMPTS = PIN_MAX_ATTEMPTS_VALUE.get();
+        PIN_LOCKOUT_SECONDS = PIN_LOCKOUT_SECONDS_VALUE.get();
     }
 }

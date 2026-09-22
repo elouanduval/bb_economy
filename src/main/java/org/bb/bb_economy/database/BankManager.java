@@ -1,50 +1,127 @@
 package org.bb.bb_economy.database;
 
+import com.mojang.logging.LogUtils;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.Config;
 import org.bb.bb_economy.init.ModItems;
 import org.bb.bb_economy.item.CardItem;
-import org.jline.utils.Log;
+import org.slf4j.Logger;
 
-import java.io.Console;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Optional;
 
-public class BankManager {
+/**
+ * Facade cote Minecraft : traduit joueurs, inventaires et items en operations sur {@link BankLedger}.
+ * Toute la logique monetaire (verrous, plafonds, atomicite) vit dans le ledger ; ici on gere
+ * l'identification du joueur, les billets et les cartes/PIN.
+ *
+ * Ces methodes touchent a l'inventaire et doivent donc etre appelees depuis le thread serveur
+ * (sauf {@link #processSalaries}, qui ne manipule que la base).
+ */
+public final class BankManager {
 
-    private static final SecureRandom RANDOM = new SecureRandom();
+    private static final Logger LOGGER = LogUtils.getLogger();
+    private static final BankLedger LEDGER = new BankLedger(DatabaseManager::getConnection);
+    private static final PinAttemptTracker PIN_ATTEMPTS = new PinAttemptTracker();
 
-    // -------------------------------------------------------------------------
-    // Helper : récupère le profile_id actif du joueur depuis mc_accounts
-    // Retourne -1 si pas de profil actif
-    // -------------------------------------------------------------------------
-    public static int getActiveProfileId(Player player) {
-        String uuid = player.getUUID().toString();
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT active_profile FROM mc_accounts WHERE uuid = ?")) {
-            stmt.setString(1, uuid);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next() && rs.getObject("active_profile") != null) {
-                return rs.getInt("active_profile");
-            }
-            return -1;
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur getActiveProfileId : " + e.getMessage(), e);
+    private BankManager() {
+    }
+
+    /** Resultat d'une verification de PIN. */
+    public record PinCheck(Status status, int attemptsLeft, long lockSeconds) {
+
+        public enum Status { OK, WRONG, LOCKED, NO_CARD }
+
+        public boolean isOk() {
+            return status == Status.OK;
         }
+
+        public String message() {
+            return switch (status) {
+                case OK -> "PIN valide.";
+                case WRONG -> attemptsLeft > 0
+                        ? "PIN incorrect. Essais restants : " + attemptsLeft + "."
+                        : "PIN incorrect. Compte verrouille pendant " + formatDuration(lockSeconds) + ".";
+                case LOCKED -> "Trop d'essais. Reessayez dans " + formatDuration(lockSeconds) + ".";
+                case NO_CARD -> "Aucune carte bancaire disponible.";
+            };
+        }
+
+        private static String formatDuration(long seconds) {
+            return seconds >= 60 ? (seconds + 59) / 60 + " min" : seconds + " s";
+        }
+    }
+
+    private record CardRow(String cardNumber, String pinHash) {
+    }
+
+    @FunctionalInterface
+    private interface Binder {
+        void bind(PreparedStatement stmt) throws SQLException;
+    }
+
+    @FunctionalInterface
+    private interface Mapper<T> {
+        T map(ResultSet rs) throws SQLException;
+    }
+
+    // -------------------------------------------------------------------------
+    // Acces base
+    // -------------------------------------------------------------------------
+
+    private static <T> T query(String sql, Binder binder, Mapper<T> mapper) {
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            binder.bind(stmt);
+            try (ResultSet rs = stmt.executeQuery()) {
+                return mapper.map(rs);
+            }
+        } catch (SQLException e) {
+            throw new BankException("Erreur base de donnees : " + e.getMessage(), e);
+        }
+    }
+
+    private static int update(String sql, Binder binder) {
+        try (Connection conn = DatabaseManager.getConnection();
+             PreparedStatement stmt = conn.prepareStatement(sql)) {
+            binder.bind(stmt);
+            return stmt.executeUpdate();
+        } catch (SQLException e) {
+            throw new BankException("Erreur base de donnees : " + e.getMessage(), e);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Profil actif (table geree par l'autre mod)
+    // -------------------------------------------------------------------------
+
+    /** Retourne l'id du profil actif du joueur, ou -1 s'il n'en a pas. */
+    public static int getActiveProfileId(Player player) {
+        return query("SELECT active_profile FROM mc_accounts WHERE uuid = ?",
+                stmt -> stmt.setString(1, player.getUUID().toString()),
+                rs -> rs.next() && rs.getObject(1) != null ? rs.getInt(1) : -1);
     }
 
     public static boolean hasActiveProfile(Player player) {
         return getActiveProfileId(player) != -1;
+    }
+
+    private static int requireProfileId(Player player) {
+        int profileId = getActiveProfileId(player);
+        if (profileId == -1) {
+            throw new BankException("Aucun profil actif pour " + player.getName().getString());
+        }
+        return profileId;
     }
 
     // -------------------------------------------------------------------------
@@ -53,33 +130,28 @@ public class BankManager {
 
     public static boolean hasAccount(Player player) {
         int profileId = getActiveProfileId(player);
-        if (profileId == -1) return false;
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT account_number FROM bb_bank_accounts WHERE owner = ?")) {
-            stmt.setInt(1, profileId);
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur hasAccount : " + e.getMessage(), e);
-        }
+        return profileId != -1 && LEDGER.findPersonalAccountNumber(profileId).isPresent();
     }
 
     public static String getAccountNumber(Player player) {
+        int profileId = requireProfileId(player);
+        return LEDGER.findPersonalAccountNumber(profileId)
+                .orElseThrow(() -> new BankException("Compte introuvable pour le profil " + profileId));
+    }
+
+    /** Solde du compte personnel, ou vide si le joueur n'a ni profil actif ni compte. */
+    public static Optional<BigDecimal> findBalance(Player player) {
         int profileId = getActiveProfileId(player);
-        if (profileId == -1) {
-            throw new RuntimeException("[BB Economy] Aucun profil actif pour " + player.getName().getString());
-        }
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT account_number FROM bb_bank_accounts WHERE owner = ?")) {
-            stmt.setInt(1, profileId);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) {
-                return rs.getString("account_number");
-            }
-            throw new RuntimeException("[BB Economy] Compte introuvable pour profil " + profileId);
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur getAccountNumber : " + e.getMessage(), e);
+        return profileId == -1 ? Optional.empty() : LEDGER.findPersonalBalance(profileId);
+    }
+
+    /** Solde pour l'affichage : 0 si le compte est introuvable ou la base indisponible. */
+    public static BigDecimal balanceOrZero(Player player) {
+        try {
+            return findBalance(player).orElse(BigDecimal.ZERO);
+        } catch (BankException e) {
+            LOGGER.error("Lecture du solde impossible pour {}", player.getName().getString(), e);
+            return BigDecimal.ZERO;
         }
     }
 
@@ -88,156 +160,140 @@ public class BankManager {
     // -------------------------------------------------------------------------
 
     public static boolean companyExists(String companyId) {
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT company_id FROM bb_companies WHERE company_id = ?")) {
-            stmt.setString(1, normalizeCompanyId(companyId));
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur companyExists : " + e.getMessage(), e);
-        }
+        return query("SELECT 1 FROM bb_companies WHERE company_id = ?",
+                stmt -> stmt.setString(1, normalizeCompanyId(companyId)),
+                ResultSet::next);
     }
 
     public static String getCompanyAccountNumber(String companyId) {
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT account_number FROM bb_companies WHERE company_id = ?")) {
-            stmt.setString(1, normalizeCompanyId(companyId));
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) {
-                return rs.getString("account_number");
-            }
-            throw new RuntimeException("[BB Economy] Entreprise introuvable : " + companyId);
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur getCompanyAccountNumber : " + e.getMessage(), e);
-        }
+        return query("SELECT account_number FROM bb_companies WHERE company_id = ?",
+                stmt -> stmt.setString(1, normalizeCompanyId(companyId)),
+                rs -> {
+                    if (rs.next()) {
+                        return rs.getString(1);
+                    }
+                    throw new BankException("Entreprise introuvable : " + companyId);
+                });
     }
 
+    /** Sera remplace par une verification LuckPerms ; garde ici pour l'instant (table bb_jobs). */
     public static boolean playerWorksForCompany(Player player, String companyId) {
         int profileId = getActiveProfileId(player);
         if (profileId == -1) return false;
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT job_id FROM bb_jobs WHERE owner = ? AND company_id = ? LIMIT 1")) {
-            stmt.setInt(1, profileId);
-            stmt.setString(2, normalizeCompanyId(companyId));
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur playerWorksForCompany : " + e.getMessage(), e);
-        }
+        return query("SELECT 1 FROM bb_jobs WHERE owner = ? AND company_id = ? LIMIT 1",
+                stmt -> {
+                    stmt.setInt(1, profileId);
+                    stmt.setString(2, normalizeCompanyId(companyId));
+                },
+                ResultSet::next);
     }
 
     // -------------------------------------------------------------------------
     // Cartes bancaires
     // -------------------------------------------------------------------------
 
+    private static List<CardRow> loadCards(int profileId) {
+        return query("SELECT bc.card_number, bc.card_pin FROM bb_bank_cards bc " +
+                        "JOIN bb_bank_accounts ba ON bc.account_number = ba.account_number " +
+                        "WHERE ba.owner = ? AND ba.account_type = ?",
+                stmt -> {
+                    stmt.setInt(1, profileId);
+                    stmt.setString(2, BankLedger.PERSONAL);
+                },
+                rs -> {
+                    List<CardRow> cards = new ArrayList<>();
+                    while (rs.next()) {
+                        cards.add(new CardRow(rs.getString(1), rs.getString(2)));
+                    }
+                    return cards;
+                });
+    }
+
     public static boolean hasDefaultCardPin(Player player) {
         int profileId = getActiveProfileId(player);
         if (profileId == -1) return false;
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT bc.card_number FROM bb_bank_cards bc " +
-                             "JOIN bb_bank_accounts ba ON bc.account_number = ba.account_number " +
-                             "WHERE ba.owner = ? AND (bc.card_pin = ? OR bc.card_pin = ?)")) {
-            stmt.setInt(1, profileId);
-            stmt.setString(2, hashPin(getDefaultCardPin()));
-            stmt.setString(3, legacyHashPin(getDefaultCardPin()));
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur hasDefaultCardPin : " + e.getMessage(), e);
-        }
+        String defaultPin = defaultPin();
+        return loadCards(profileId).stream().anyMatch(card -> PinHasher.verify(defaultPin, card.pinHash()));
     }
 
     public static String getCardNumber(Player player) {
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1) {
-            throw new RuntimeException("[BB Economy] Aucun profil actif pour " + player.getName().getString());
+        int profileId = requireProfileId(player);
+        List<CardRow> cards = loadCards(profileId);
+        if (cards.isEmpty()) {
+            throw new BankException("Carte introuvable pour le profil " + profileId);
         }
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT bc.card_number FROM bb_bank_cards bc " +
-                             "JOIN bb_bank_accounts ba ON bc.account_number = ba.account_number " +
-                             "WHERE ba.owner = ? LIMIT 1")) {
-            stmt.setInt(1, profileId);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) {
-                return rs.getString("card_number");
-            }
-            throw new RuntimeException("[BB Economy] Carte introuvable pour profil " + profileId);
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur getCardNumber : " + e.getMessage(), e);
-        }
-    }
-
-    public static boolean cardExists(String cardNumber) {
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT card_number FROM bb_bank_cards WHERE card_number = ?")) {
-            stmt.setString(1, cardNumber);
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur cardExists : " + e.getMessage(), e);
-        }
+        return cards.get(0).cardNumber();
     }
 
     public static boolean playerOwnsCard(Player player, String cardNumber) {
         int profileId = getActiveProfileId(player);
-        if (profileId == -1) return false;
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT bc.card_number FROM bb_bank_cards bc " +
-                             "JOIN bb_bank_accounts ba ON bc.account_number = ba.account_number " +
-                             "WHERE ba.owner = ? AND bc.card_number = ?")) {
-            stmt.setInt(1, profileId);
-            stmt.setString(2, cardNumber);
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur playerOwnsCard : " + e.getMessage(), e);
-        }
+        if (profileId == -1 || cardNumber == null || cardNumber.isBlank()) return false;
+        return loadCards(profileId).stream().anyMatch(card -> card.cardNumber().equals(cardNumber));
     }
 
-    public static boolean hasOwnedCardInInventory(Player player) {
-        for (ItemStack stack : player.getInventory().items) {
-            if (stack.getItem() != ModItems.CARD.get()) continue;
-            String cardNumber = CardItem.getCardNumber(stack);
-            if (!cardNumber.isBlank() && playerOwnsCard(player, cardNumber)) return true;
-        }
-        for (ItemStack stack : player.getInventory().offhand) {
-            if (stack.getItem() != ModItems.CARD.get()) continue;
-            String cardNumber = CardItem.getCardNumber(stack);
-            if (!cardNumber.isBlank() && playerOwnsCard(player, cardNumber)) return true;
-        }
-        return false;
-    }
-
+    /**
+     * Vrai si le joueur tient (main ou seconde main) une carte qui lui appartient.
+     * En cas d'erreur de base de donnees on refuse plutot que de laisser passer.
+     */
     public static boolean hasOwnedCardInHand(Player player) {
-        ItemStack mainHand = player.getMainHandItem();
-        if (mainHand.getItem() == ModItems.CARD.get()) {
-            String cardNumber = CardItem.getCardNumber(mainHand);
-            if (!cardNumber.isBlank() && playerOwnsCard(player, cardNumber)) return true;
+        try {
+            return isOwnedCard(player, player.getMainHandItem()) || isOwnedCard(player, player.getOffhandItem());
+        } catch (BankException e) {
+            LOGGER.error("Verification de la carte impossible pour {}", player.getName().getString(), e);
+            return false;
         }
-        ItemStack offHand = player.getOffhandItem();
-        if (offHand.getItem() == ModItems.CARD.get()) {
-            String cardNumber = CardItem.getCardNumber(offHand);
-            if (!cardNumber.isBlank() && playerOwnsCard(player, cardNumber)) return true;
-        }
-        return false;
     }
 
-    public static boolean checkPin(Player player, int pin) {
+    private static boolean isOwnedCard(Player player, ItemStack stack) {
+        if (stack.getItem() != ModItems.CARD.get()) return false;
+        String cardNumber = CardItem.getCardNumber(stack);
+        return !cardNumber.isBlank() && playerOwnsCard(player, cardNumber);
+    }
+
+    public static PinCheck checkPin(Player player, int pin) {
         int profileId = getActiveProfileId(player);
-        if (profileId == -1) return false;
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT bc.card_number FROM bb_bank_cards bc " +
-                             "JOIN bb_bank_accounts ba ON bc.account_number = ba.account_number " +
-                             "WHERE ba.owner = ? AND (bc.card_pin = ? OR bc.card_pin = ?)")) {
-            stmt.setInt(1, profileId);
-            stmt.setString(2, hashPin(pin));
-            stmt.setString(3, legacyHashPin(pin));
-            return stmt.executeQuery().next();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur checkPin : " + e.getMessage(), e);
+        if (profileId == -1) return new PinCheck(PinCheck.Status.NO_CARD, 0, 0);
+        Optional<String> account = LEDGER.findPersonalAccountNumber(profileId);
+        if (account.isEmpty()) return new PinCheck(PinCheck.Status.NO_CARD, 0, 0);
+        String accountNumber = account.get();
+
+        long locked = PIN_ATTEMPTS.remainingLockSeconds(accountNumber);
+        if (locked > 0) {
+            return new PinCheck(PinCheck.Status.LOCKED, 0, locked);
+        }
+        if (pin < 0 || pin > 9999) {
+            return recordFailedPin(accountNumber);
+        }
+
+        String candidate = String.format("%04d", pin);
+        List<CardRow> cards = loadCards(profileId);
+        if (cards.isEmpty()) return new PinCheck(PinCheck.Status.NO_CARD, 0, 0);
+
+        for (CardRow card : cards) {
+            if (PinHasher.verify(candidate, card.pinHash())) {
+                PIN_ATTEMPTS.reset(accountNumber);
+                if (PinHasher.needsUpgrade(card.pinHash())) {
+                    upgradePinHash(card.cardNumber(), candidate);
+                }
+                return new PinCheck(PinCheck.Status.OK, 0, 0);
+            }
+        }
+        return recordFailedPin(accountNumber);
+    }
+
+    private static PinCheck recordFailedPin(String accountNumber) {
+        int left = PIN_ATTEMPTS.recordFailure(accountNumber, Config.PIN_MAX_ATTEMPTS, Config.PIN_LOCKOUT_SECONDS * 1000L);
+        return new PinCheck(PinCheck.Status.WRONG, left, left == 0 ? Config.PIN_LOCKOUT_SECONDS : 0);
+    }
+
+    private static void upgradePinHash(String cardNumber, String pin) {
+        try {
+            update("UPDATE bb_bank_cards SET card_pin = ? WHERE card_number = ?", stmt -> {
+                stmt.setString(1, PinHasher.hash(pin));
+                stmt.setString(2, cardNumber);
+            });
+        } catch (BankException e) {
+            LOGGER.warn("Migration du hash de PIN impossible pour la carte {}", cardNumber, e);
         }
     }
 
@@ -245,414 +301,163 @@ public class BankManager {
         if (!isValidPin(pin)) return false;
         int profileId = getActiveProfileId(player);
         if (profileId == -1) return false;
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement getAccount = conn.prepareStatement(
-                     "SELECT account_number FROM bb_bank_accounts WHERE owner = ?");
-             PreparedStatement updateCard = conn.prepareStatement(
-                     "UPDATE bb_bank_cards SET card_pin = ? WHERE account_number = ?")) {
-            getAccount.setInt(1, profileId);
-            ResultSet rs = getAccount.executeQuery();
-            if (!rs.next()) return false;
-            updateCard.setString(1, hashPin(pin));
-            updateCard.setString(2, rs.getString("account_number"));
-            return updateCard.executeUpdate() > 0;
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur updateCardPin : " + e.getMessage(), e);
+        Optional<String> account = LEDGER.findPersonalAccountNumber(profileId);
+        if (account.isEmpty()) return false;
+
+        String newHash = PinHasher.hash(pin);
+        int rows = update("UPDATE bb_bank_cards SET card_pin = ? WHERE account_number = ?", stmt -> {
+            stmt.setString(1, newHash);
+            stmt.setString(2, account.get());
+        });
+        if (rows > 0) {
+            PIN_ATTEMPTS.reset(account.get());
         }
+        return rows > 0;
     }
 
     public static boolean resetCardPinToDefault(Player player) {
-        return updateCardPin(player, String.format("%04d", getDefaultCardPin()));
+        return updateCardPin(player, defaultPin());
     }
 
-    public static void addCard(Player player, String cardNumber, int pin) {
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1) {
-            throw new RuntimeException("[BB Economy] Aucun profil actif pour " + player.getName().getString());
-        }
-        try (Connection conn = DatabaseManager.getConnection()) {
-            PreparedStatement getAccount = conn.prepareStatement(
-                    "SELECT account_number FROM bb_bank_accounts WHERE owner = ?");
-            getAccount.setInt(1, profileId);
-            ResultSet rs = getAccount.executeQuery();
-            if (!rs.next()) throw new RuntimeException("Compte introuvable pour profil " + profileId);
-
-            PreparedStatement insert = conn.prepareStatement(
-                    "INSERT INTO bb_bank_cards (card_number, card_pin, account_number) VALUES (?, ?, ?)");
-            insert.setString(1, cardNumber);
-            insert.setString(2, hashPin(pin));
-            insert.setString(3, rs.getString("account_number"));
-            insert.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur addCard : " + e.getMessage(), e);
-        }
-    }
-
+    /** Cree le compte personnel et la carte, puis remet les objets prevus par la configuration. */
     public static String createBankAccountAndCard(Player player) {
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1) {
-            throw new RuntimeException("[BB Economy] Aucun profil actif pour " + player.getName().getString());
+        int profileId = requireProfileId(player);
+
+        BigDecimal startingBalance = BigDecimal.valueOf(Config.STARTING_BANK_BALANCE)
+                .setScale(2, RoundingMode.HALF_UP)
+                .min(Money.MAX_AMOUNT);
+        Optional<BankLedger.Created> created = LEDGER.createPersonalAccount(
+                profileId, PinHasher.hash(defaultPin()), startingBalance, currentInGameDay(player));
+        if (created.isEmpty()) {
+            throw new IllegalStateException("Un compte bancaire existe deja pour le profil " + profileId);
         }
 
-        final String accountNumber;
-        final String cardNumber;
-
-        try (Connection conn = DatabaseManager.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                String existingAccount = findAccountNumberByOwner(conn, profileId);
-                if (existingAccount != null) {
-                    conn.rollback();
-                    throw new IllegalStateException("[BB Economy] Un compte bancaire existe deja pour le profil " + profileId);
-                }
-
-                accountNumber = generateUniqueAccountNumber(conn);
-                cardNumber = generateUniqueCardNumber(conn);
-
-                try (PreparedStatement insertAccount = conn.prepareStatement(
-                        "INSERT INTO bb_bank_accounts (account_number, account_type, account_balance, owner) VALUES (?, ?, ?, ?)");
-                     PreparedStatement insertCard = conn.prepareStatement(
-                             "INSERT INTO bb_bank_cards (card_number, card_pin, account_number) VALUES (?, ?, ?)")) {
-                    insertAccount.setString(1, accountNumber);
-                    insertAccount.setString(2, "personal");
-                    insertAccount.setBigDecimal(3, BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP));
-                    insertAccount.setInt(4, profileId);
-                    insertAccount.executeUpdate();
-
-                    insertCard.setString(1, cardNumber);
-                    insertCard.setString(2, hashPin(getDefaultCardPin()));
-                    insertCard.setString(3, accountNumber);
-                    insertCard.executeUpdate();
-                }
-
-                conn.commit();
-            } catch (SQLException | RuntimeException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur createBankAccountAndCard : " + e.getMessage(), e);
+        String cardNumber = created.get().cardNumber();
+        if (Config.GIVE_STARTER_CARD) {
+            giveCardItemByNumber(player, cardNumber);
         }
-
-        giveCardItemByNumber(player, cardNumber);
-        giveWalletItem(player);
+        if (Config.GIVE_STARTER_WALLET) {
+            giveWalletItem(player);
+        }
+        if (Config.STARTING_CASH_INVENTORY > 0) {
+            addMoneyStacks(player, Config.STARTING_CASH_INVENTORY);
+            syncInventory(player);
+        }
         return cardNumber;
     }
 
     public static String reissueCard(Player player) {
         String cardNumber = getCardNumber(player);
         if (!resetCardPinToDefault(player)) {
-            throw new RuntimeException("[BB Economy] Impossible de reinitialiser le PIN de la carte.");
+            throw new BankException("Impossible de reinitialiser le PIN de la carte.");
         }
         if (!giveCardItemByNumber(player, cardNumber)) {
-            throw new RuntimeException("[BB Economy] Impossible de redonner la carte bancaire.");
+            throw new BankException("Impossible de redonner la carte bancaire.");
         }
         return cardNumber;
     }
 
     // -------------------------------------------------------------------------
-    // Solde & transactions
+    // Operations d'argent
     // -------------------------------------------------------------------------
 
-    public static BigDecimal getBalance(Player player) {
+    /**
+     * Depot de billets. Les billets sont retires AVANT le credit : si le serveur s'arrete entre les deux,
+     * le joueur perd des billets au lieu d'en dupliquer. Ils sont rendus si le depot est refuse.
+     */
+    public static TxResult deposit(Player player, BigDecimal amount) {
+        if (!Money.isValid(amount) || !Money.isWhole(amount)) return TxResult.INVALID_AMOUNT;
         int profileId = getActiveProfileId(player);
-        if (profileId == -1) {
-            throw new RuntimeException("[BB Economy] Aucun profil actif pour " + player.getName().getString());
+        if (profileId == -1) return TxResult.NO_ACCOUNT;
+
+        int bills = Money.toBills(amount);
+        if (countBills(player) < bills) return TxResult.NOT_ENOUGH_CASH;
+
+        removeBills(player, bills);
+        final TxResult result;
+        try {
+            result = LEDGER.deposit(profileId, amount, dailyLimit(Config.DAILY_DEPOSIT_LIMIT), currentInGameDay(player));
+        } catch (RuntimeException e) {
+            addMoneyStacks(player, bills);
+            syncInventory(player);
+            throw e;
         }
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT account_balance FROM bb_bank_accounts WHERE owner = ?")) {
-            stmt.setInt(1, profileId);
-            ResultSet rs = stmt.executeQuery();
-            if (rs.next()) return rs.getBigDecimal("account_balance");
-            throw new RuntimeException("[BB Economy] Compte introuvable pour profil " + profileId);
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur getBalance : " + e.getMessage(), e);
+        if (!result.isOk()) {
+            addMoneyStacks(player, bills);
         }
+        syncInventory(player);
+        return result;
     }
 
-    public static String validateDeposit(Player player, BigDecimal amount) {
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) return "Montant invalide.";
-        if (getRemainingDailyDepositLimit(player).compareTo(amount) < 0) return "Limite de depot journaliere atteinte.";
-        return null;
-    }
-
-    public static String validateWithdraw(Player player, BigDecimal amount) {
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) return "Montant invalide.";
-        if (getRemainingDailyWithdrawLimit(player).compareTo(amount) < 0) return "Limite de retrait journaliere atteinte.";
-        return null;
-    }
-
-    public static String validateTransfer(Player player, BigDecimal amount) {
-        if (amount.compareTo(BigDecimal.ZERO) <= 0) return "Montant invalide.";
-        if (getRemainingDailyTransferLimit(player).compareTo(amount) < 0) return "Limite de virement journaliere atteinte.";
-        return null;
-    }
-
-    public static boolean withdraw(Player player, BigDecimal amount) {
+    /** Retrait de billets : le compte est debite puis les billets sont remis (ou jetes au sol si l'inventaire est plein). */
+    public static TxResult withdraw(Player player, BigDecimal amount) {
+        if (!Money.isValid(amount) || !Money.isWhole(amount)) return TxResult.INVALID_AMOUNT;
         int profileId = getActiveProfileId(player);
-        if (profileId == -1) return false;
-        long inGameDay = getCurrentInGameDay(player);
+        if (profileId == -1) return TxResult.NO_ACCOUNT;
 
-        try (Connection conn = DatabaseManager.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                PreparedStatement check = conn.prepareStatement(
-                        "SELECT account_balance, account_number FROM bb_bank_accounts WHERE owner = ? FOR UPDATE");
-                check.setInt(1, profileId);
-                ResultSet rs = check.executeQuery();
-                if (!rs.next() || rs.getBigDecimal("account_balance").compareTo(amount) < 0) {
-                    conn.rollback();
-                    return false;
-                }
-                String accountNumber = rs.getString("account_number");
-
-                PreparedStatement update = conn.prepareStatement(
-                        "UPDATE bb_bank_accounts SET account_balance = account_balance - ? WHERE owner = ?");
-                update.setBigDecimal(1, amount);
-                update.setInt(2, profileId);
-                update.executeUpdate();
-
-                logTransaction(conn, "ATM_WITHDRAW", amount, accountNumber, null, inGameDay);
-                conn.commit();
-
-                int units = amount.intValue();
-                if (units > 0) { addMoneyStacks(player, units); syncInventory(player); }
-                return true;
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur retrait : " + e.getMessage(), e);
+        TxResult result = LEDGER.withdraw(profileId, amount, dailyLimit(Config.DAILY_WITHDRAW_LIMIT), currentInGameDay(player));
+        if (result.isOk()) {
+            addMoneyStacks(player, Money.toBills(amount));
+            syncInventory(player);
         }
+        return result;
     }
 
-    public static boolean deposit(Player player, BigDecimal amount) {
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1) return false;
-        long inGameDay = getCurrentInGameDay(player);
-
-        int totalBills = 0;
-        for (ItemStack stack : player.getInventory().items) {
-            if (stack.getItem() == ModItems.MONEY.get()) totalBills += stack.getCount();
-        }
-        if (totalBills < amount.intValue()) return false;
-
-        try (Connection conn = DatabaseManager.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                PreparedStatement check = conn.prepareStatement(
-                        "SELECT account_number FROM bb_bank_accounts WHERE owner = ?");
-                check.setInt(1, profileId);
-                ResultSet rs = check.executeQuery();
-                if (!rs.next()) { conn.rollback(); return false; }
-                String accountNumber = rs.getString("account_number");
-
-                PreparedStatement update = conn.prepareStatement(
-                        "UPDATE bb_bank_accounts SET account_balance = account_balance + ? WHERE owner = ?");
-                update.setBigDecimal(1, amount);
-                update.setInt(2, profileId);
-                update.executeUpdate();
-
-                logTransaction(conn, "ATM_DEPOSIT", amount, null, accountNumber, inGameDay);
-                conn.commit();
-
-                int remaining = amount.intValue();
-                for (ItemStack stack : player.getInventory().items) {
-                    if (remaining <= 0) break;
-                    if (stack.getItem() == ModItems.MONEY.get()) {
-                        int taken = Math.min(stack.getCount(), remaining);
-                        stack.shrink(taken);
-                        remaining -= taken;
-                    }
-                }
-                syncInventory(player);
-                return true;
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur depot : " + e.getMessage(), e);
-        }
-    }
-
-    public static boolean transfer(Player fromPlayer, String toAccountNumber, BigDecimal amount) {
+    public static TxResult transfer(Player fromPlayer, String toAccountNumber, BigDecimal amount) {
         int profileId = getActiveProfileId(fromPlayer);
-        if (profileId == -1) return false;
-        long inGameDay = getCurrentInGameDay(fromPlayer);
-
-        try (Connection conn = DatabaseManager.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                PreparedStatement checkFrom = conn.prepareStatement(
-                        "SELECT account_balance, account_number FROM bb_bank_accounts WHERE owner = ? FOR UPDATE");
-                checkFrom.setInt(1, profileId);
-                ResultSet rsFrom = checkFrom.executeQuery();
-                if (!rsFrom.next() || rsFrom.getBigDecimal("account_balance").compareTo(amount) < 0) {
-                    conn.rollback();
-                    return false;
-                }
-                String fromAccount = rsFrom.getString("account_number");
-
-                PreparedStatement checkTo = conn.prepareStatement(
-                        "SELECT account_number FROM bb_bank_accounts WHERE account_number = ? FOR UPDATE");
-                checkTo.setString(1, toAccountNumber);
-                if (!checkTo.executeQuery().next()) { conn.rollback(); return false; }
-
-                PreparedStatement debit = conn.prepareStatement(
-                        "UPDATE bb_bank_accounts SET account_balance = account_balance - ? WHERE owner = ?");
-                debit.setBigDecimal(1, amount);
-                debit.setInt(2, profileId);
-                debit.executeUpdate();
-
-                PreparedStatement credit = conn.prepareStatement(
-                        "UPDATE bb_bank_accounts SET account_balance = account_balance + ? WHERE account_number = ?");
-                credit.setBigDecimal(1, amount);
-                credit.setString(2, toAccountNumber);
-                credit.executeUpdate();
-
-                logTransaction(conn, "TRANSFER", amount, fromAccount, toAccountNumber, inGameDay);
-                conn.commit();
-                return true;
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur virement : " + e.getMessage(), e);
-        }
+        if (profileId == -1) return TxResult.NO_ACCOUNT;
+        return LEDGER.transfer(profileId, toAccountNumber, amount, dailyLimit(Config.DAILY_TRANSFER_LIMIT),
+                currentInGameDay(fromPlayer));
     }
 
-    public static boolean processTpePayment(Player buyer, String companyAccount, BigDecimal amount) {
+    public static TxResult processTpePayment(Player buyer, String companyAccount, BigDecimal amount) {
         int profileId = getActiveProfileId(buyer);
-        if (profileId == -1) return false;
-        long inGameDay = getCurrentInGameDay(buyer);
-
-        try (Connection conn = DatabaseManager.getConnection()) {
-            conn.setAutoCommit(false);
-            try {
-                PreparedStatement checkBuyer = conn.prepareStatement(
-                        "SELECT account_balance, account_number FROM bb_bank_accounts WHERE owner = ? FOR UPDATE");
-                checkBuyer.setInt(1, profileId);
-                ResultSet buyerResult = checkBuyer.executeQuery();
-                if (!buyerResult.next() || buyerResult.getBigDecimal("account_balance").compareTo(amount) < 0) {
-                    conn.rollback();
-                    return false;
-                }
-                String buyerAccount = buyerResult.getString("account_number");
-
-                PreparedStatement checkCompany = conn.prepareStatement(
-                        "SELECT account_number FROM bb_bank_accounts WHERE account_number = ? FOR UPDATE");
-                checkCompany.setString(1, companyAccount);
-                if (!checkCompany.executeQuery().next()) { conn.rollback(); return false; }
-
-                PreparedStatement debitBuyer = conn.prepareStatement(
-                        "UPDATE bb_bank_accounts SET account_balance = account_balance - ? WHERE account_number = ?");
-                debitBuyer.setBigDecimal(1, amount);
-                debitBuyer.setString(2, buyerAccount);
-                debitBuyer.executeUpdate();
-
-                PreparedStatement creditCompany = conn.prepareStatement(
-                        "UPDATE bb_bank_accounts SET account_balance = account_balance + ? WHERE account_number = ?");
-                creditCompany.setBigDecimal(1, amount);
-                creditCompany.setString(2, companyAccount);
-                creditCompany.executeUpdate();
-
-                logTransaction(conn, "TPE", amount, buyerAccount, companyAccount, inGameDay);
-                conn.commit();
-                return true;
-            } catch (SQLException e) {
-                conn.rollback();
-                throw e;
-            } finally {
-                conn.setAutoCommit(true);
-            }
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur processTpePayment : " + e.getMessage(), e);
-        }
+        if (profileId == -1) return TxResult.NO_ACCOUNT;
+        return LEDGER.payTpe(profileId, companyAccount, amount, currentInGameDay(buyer));
     }
 
+    /** Verse les salaires dus a ce tick. Appele hors thread serveur : ne touche qu'a la base. */
     public static void processSalaries(long currentDayTime) {
         int tick = (int) (currentDayTime % 24000);
         long inGameDay = currentDayTime / 24000L;
 
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "SELECT j.job_id, j.job_salary, j.owner AS profile_id, j.company_id, " +
-                             "       c.account_number AS company_account " +
-                             "FROM bb_jobs j " +
-                             "JOIN bb_companies c ON j.company_id = c.company_id " +
-                             "WHERE j.job_salary_time = ?")) {
-
-            stmt.setInt(1, tick);
-            ResultSet rs = stmt.executeQuery();
-
-            while (rs.next()) {
-                int ownerProfileId = rs.getInt("profile_id");
-                BigDecimal salary = rs.getBigDecimal("job_salary");
-                String companyAccount = rs.getString("company_account");
-                String jobId = rs.getString("job_id");
-
-                PreparedStatement getAccount = conn.prepareStatement(
-                        "SELECT account_number FROM bb_bank_accounts WHERE owner = ?");
-                getAccount.setInt(1, ownerProfileId);
-                ResultSet rsAcc = getAccount.executeQuery();
-                if (!rsAcc.next()) continue;
-                String playerAccount = rsAcc.getString("account_number");
-
-                BigDecimal companyBalance = getCompanyBalance(conn, companyAccount);
-                if (companyBalance.compareTo(salary) < 0) {
-                    System.out.println("[BB Economy] Salaire non verse pour job " + jobId +
-                            " : solde entreprise insuffisant.");
-                    continue;
-                }
-
-                conn.setAutoCommit(false);
-                try {
-                    PreparedStatement debit = conn.prepareStatement(
-                            "UPDATE bb_bank_accounts SET account_balance = account_balance - ? WHERE account_number = ?");
-                    debit.setBigDecimal(1, salary);
-                    debit.setString(2, companyAccount);
-                    debit.executeUpdate();
-
-                    PreparedStatement credit = conn.prepareStatement(
-                            "UPDATE bb_bank_accounts SET account_balance = account_balance + ? WHERE account_number = ?");
-                    credit.setBigDecimal(1, salary);
-                    credit.setString(2, playerAccount);
-                    credit.executeUpdate();
-
-                    logTransaction(conn, "SALARY", salary, companyAccount, playerAccount, inGameDay);
-                    conn.commit();
-                    System.out.println("[BB Economy] Salaire verse : " + salary +
-                            " de " + companyAccount + " vers " + playerAccount);
-                } catch (SQLException e) {
-                    conn.rollback();
-                    System.err.println("[BB Economy] Erreur versement salaire job " + jobId + " : " + e.getMessage());
-                } finally {
-                    conn.setAutoCommit(true);
-                }
-            }
-        } catch (SQLException e) {
-            System.err.println("[BB Economy] Erreur processSalaries : " + e.getMessage());
+        record Salary(String jobId, BigDecimal amount, int profileId, String companyAccount) {
         }
-    }
 
-    private static BigDecimal getCompanyBalance(Connection conn, String accountNumber) throws SQLException {
-        PreparedStatement stmt = conn.prepareStatement(
-                "SELECT account_balance FROM bb_bank_accounts WHERE account_number = ?");
-        stmt.setString(1, accountNumber);
-        ResultSet rs = stmt.executeQuery();
-        return rs.next() ? rs.getBigDecimal("account_balance") : BigDecimal.ZERO;
+        final List<Salary> due;
+        try {
+            due = query("SELECT j.job_id, j.job_salary, j.owner, c.account_number " +
+                            "FROM bb_jobs j JOIN bb_companies c ON j.company_id = c.company_id " +
+                            "WHERE j.job_salary_time = ?",
+                    stmt -> stmt.setInt(1, tick),
+                    rs -> {
+                        List<Salary> rows = new ArrayList<>();
+                        while (rs.next()) {
+                            rows.add(new Salary(rs.getString(1), rs.getBigDecimal(2), rs.getInt(3), rs.getString(4)));
+                        }
+                        return rows;
+                    });
+        } catch (BankException e) {
+            LOGGER.error("Lecture des salaires impossible", e);
+            return;
+        }
+
+        for (Salary salary : due) {
+            try {
+                Optional<String> playerAccount = LEDGER.findPersonalAccountNumber(salary.profileId());
+                if (playerAccount.isEmpty() || !Money.isValid(salary.amount())) continue;
+
+                TxResult result = LEDGER.transferBetweenAccounts(salary.companyAccount(), playerAccount.get(),
+                        salary.amount(), BankLedger.TYPE_SALARY, inGameDay);
+                if (result.isOk()) {
+                    LOGGER.info("Salaire verse : {} de {} vers {}", salary.amount(), salary.companyAccount(), playerAccount.get());
+                } else {
+                    LOGGER.warn("Salaire non verse pour le job {} : {}", salary.jobId(), result.message());
+                }
+            } catch (BankException e) {
+                LOGGER.error("Erreur de versement du salaire pour le job {}", salary.jobId(), e);
+            }
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -665,95 +470,68 @@ public class BankManager {
         return stack;
     }
 
-    public static boolean giveCardItem(Player player) {
-        return giveCardItemByNumber(player, getCardNumber(player));
-    }
-
     public static boolean giveCardItemByNumber(Player player, String cardNumber) {
-        if (cardNumber == null || cardNumber.isBlank()) return false;
         if (!playerOwnsCard(player, cardNumber)) return false;
         ItemStack cardStack = createCardItem(cardNumber);
-        boolean added = player.getInventory().add(cardStack);
-        if (!added) player.drop(cardStack, false);
+        if (!player.getInventory().add(cardStack)) {
+            player.drop(cardStack, false);
+        }
         markCardItemGiven(cardNumber, player.getUUID().toString());
         return true;
     }
 
     public static boolean giveWalletItem(Player player) {
         ItemStack walletStack = new ItemStack(ModItems.WALLET.get());
-        boolean added = player.getInventory().add(walletStack);
-        if (!added) player.drop(walletStack, false);
+        if (!player.getInventory().add(walletStack)) {
+            player.drop(walletStack, false);
+        }
         return true;
     }
 
-    public static void markCardItemGiven(String cardNumber, String receiverUuid) {
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(
-                     "UPDATE bb_bank_cards " +
-                             "SET card_last_item_given_at = CURRENT_TIMESTAMP, card_last_item_receiver = ? " +
-                             "WHERE card_number = ?")) {
-            stmt.setString(1, receiverUuid);
-            stmt.setString(2, cardNumber);
-            stmt.executeUpdate();
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur markCardItemGiven : " + e.getMessage(), e);
-        }
-    }
-
-    // -------------------------------------------------------------------------
-    // PIN
-    // -------------------------------------------------------------------------
-
-    public static int getDefaultCardPin() {
-        return Config.DEFAULT_CARD_PIN;
-    }
-
-    public static String hashPin(int pin) {
-        return hashPin(normalizePin(pin));
-    }
-
-    public static String hashPin(String pin) {
+    /** Trace informative : un echec ne doit pas annuler une carte deja remise au joueur. */
+    private static void markCardItemGiven(String cardNumber, String receiverUuid) {
         try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(pin.getBytes());
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 non disponible", e);
+            update("UPDATE bb_bank_cards SET card_last_item_given_at = CURRENT_TIMESTAMP, card_last_item_receiver = ? " +
+                    "WHERE card_number = ?", stmt -> {
+                stmt.setString(1, receiverUuid);
+                stmt.setString(2, cardNumber);
+            });
+        } catch (BankException e) {
+            LOGGER.warn("Trace de remise de la carte {} impossible", cardNumber, e);
         }
     }
 
-    private static String legacyHashPin(int pin) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] hash = md.digest(String.valueOf(pin).getBytes());
-            StringBuilder sb = new StringBuilder();
-            for (byte b : hash) sb.append(String.format("%02x", b));
-            return sb.toString();
-        } catch (NoSuchAlgorithmException e) {
-            throw new RuntimeException("SHA-256 non disponible", e);
+    private static int countBills(Player player) {
+        int total = 0;
+        for (ItemStack stack : player.getInventory().items) {
+            if (stack.getItem() == ModItems.MONEY.get()) total += stack.getCount();
+        }
+        return total;
+    }
+
+    private static void removeBills(Player player, int amount) {
+        int remaining = amount;
+        for (ItemStack stack : player.getInventory().items) {
+            if (remaining <= 0) break;
+            if (stack.getItem() == ModItems.MONEY.get()) {
+                int taken = Math.min(stack.getCount(), remaining);
+                stack.shrink(taken);
+                remaining -= taken;
+            }
         }
     }
 
-    private static String normalizePin(int pin) {
-        if (pin < 0 || pin > 9999) throw new IllegalArgumentException("Le PIN doit contenir 4 chiffres");
-        return String.format("%04d", pin);
-    }
-
-    public static boolean isValidPin(String pin) {
-        return pin != null && pin.matches("\\d{4}");
-    }
-
-    // -------------------------------------------------------------------------
-    // Utilitaires
-    // -------------------------------------------------------------------------
-
-    public static String normalizeCompanyId(String companyId) {
-        if (companyId == null) throw new IllegalArgumentException("companyId ne peut pas etre null");
-        String value = companyId.trim().toUpperCase();
-        if (value.isBlank()) throw new IllegalArgumentException("companyId ne peut pas etre vide");
-        return value;
+    private static void addMoneyStacks(Player player, int amount) {
+        int remaining = amount;
+        int maxStackSize = ModItems.MONEY.get().getDefaultInstance().getMaxStackSize();
+        while (remaining > 0) {
+            int stackSize = Math.min(remaining, maxStackSize);
+            ItemStack moneyStack = new ItemStack(ModItems.MONEY.get(), stackSize);
+            if (!player.getInventory().add(moneyStack)) {
+                player.drop(moneyStack, false);
+            }
+            remaining -= stackSize;
+        }
     }
 
     private static void syncInventory(Player player) {
@@ -764,116 +542,38 @@ public class BankManager {
         }
     }
 
-    private static BigDecimal getRemainingDailyDepositLimit(Player player) {
-        return getConfiguredDailyLimit(Config.DAILY_DEPOSIT_LIMIT)
-                .subtract(getDailyTransactionTotal(getAccountNumber(player), "ATM_DEPOSIT", false, getCurrentInGameDay(player)))
-                .max(BigDecimal.ZERO);
+    // -------------------------------------------------------------------------
+    // PIN et utilitaires
+    // -------------------------------------------------------------------------
+
+    public static boolean isValidPin(String pin) {
+        return pin != null && pin.matches("\\d{4}");
     }
 
-    private static BigDecimal getRemainingDailyWithdrawLimit(Player player) {
-        return getConfiguredDailyLimit(Config.DAILY_WITHDRAW_LIMIT)
-                .subtract(getDailyTransactionTotal(getAccountNumber(player), "ATM_WITHDRAW", true, getCurrentInGameDay(player)))
-                .max(BigDecimal.ZERO);
+    /** Le PIN par defaut est reserve : le joueur doit en choisir un autre. */
+    public static boolean isDefaultPin(String pin) {
+        return defaultPin().equals(pin);
     }
 
-    private static BigDecimal getRemainingDailyTransferLimit(Player player) {
-        return getConfiguredDailyLimit(Config.DAILY_TRANSFER_LIMIT)
-                .subtract(getDailyTransactionTotal(getAccountNumber(player), "TRANSFER", true, getCurrentInGameDay(player)))
-                .max(BigDecimal.ZERO);
+    private static String defaultPin() {
+        return String.format("%04d", Config.DEFAULT_CARD_PIN);
     }
 
-    private static BigDecimal getDailyTransactionTotal(String accountNumber, String transactionType,
-                                                       boolean useOrigin, long inGameDay) {
-        String column = useOrigin ? "account_origin" : "account_target";
-        String sql = "SELECT COALESCE(SUM(transaction_amount), 0) AS total " +
-                "FROM bb_transactions WHERE transaction_type = ? AND transaction_ingame_day = ? AND " + column + " = ?";
-        try (Connection conn = DatabaseManager.getConnection();
-             PreparedStatement stmt = conn.prepareStatement(sql)) {
-            stmt.setString(1, transactionType);
-            stmt.setLong(2, inGameDay);
-            stmt.setString(3, accountNumber);
-            ResultSet rs = stmt.executeQuery();
-            return rs.next() ? rs.getBigDecimal("total") : BigDecimal.ZERO;
-        } catch (SQLException e) {
-            throw new RuntimeException("[BB Economy] Erreur lecture limite journaliere : " + e.getMessage(), e);
-        }
+    public static String normalizeCompanyId(String companyId) {
+        if (companyId == null) throw new IllegalArgumentException("companyId ne peut pas etre null");
+        String value = companyId.trim().toUpperCase();
+        if (value.isBlank()) throw new IllegalArgumentException("companyId ne peut pas etre vide");
+        return value;
     }
 
-    private static BigDecimal getConfiguredDailyLimit(double configuredValue) {
-        return configAmount(configuredValue);
+    private static BigDecimal dailyLimit(double configuredValue) {
+        return BigDecimal.valueOf(configuredValue).setScale(2, RoundingMode.HALF_UP);
     }
 
-    private static BigDecimal configAmount(double value) {
-        return BigDecimal.valueOf(value).setScale(2, RoundingMode.HALF_UP);
-    }
-
-    private static long getCurrentInGameDay(Player player) {
-        return player.level().getDayTime() / 24000L;
-    }
-
-    private static void addMoneyStacks(Player player, int amount) {
-        int remaining = amount;
-        int maxStackSize = ModItems.MONEY.get().getDefaultInstance().getMaxStackSize();
-        while (remaining > 0) {
-            int stackSize = Math.min(remaining, maxStackSize);
-            ItemStack moneyStack = new ItemStack(ModItems.MONEY.get(), stackSize);
-            boolean added = player.getInventory().add(moneyStack);
-            if (!added) player.drop(moneyStack, false);
-            remaining -= stackSize;
-        }
-    }
-
-    private static void logTransaction(Connection conn, String type, BigDecimal amount,
-                                       String origin, String target, long inGameDay) throws SQLException {
-        PreparedStatement stmt = conn.prepareStatement(
-                "INSERT INTO bb_transactions " +
-                        "(transaction_type, transaction_amount, account_origin, account_target, transaction_ingame_day) " +
-                        "VALUES (?, ?, ?, ?, ?)");
-        stmt.setString(1, type);
-        stmt.setBigDecimal(2, amount);
-        stmt.setString(3, origin);
-        stmt.setString(4, target);
-        stmt.setLong(5, inGameDay);
-        stmt.executeUpdate();
-    }
-
-    private static String findAccountNumberByOwner(Connection conn, int profileId) throws SQLException {
-        try (PreparedStatement stmt = conn.prepareStatement(
-                "SELECT account_number FROM bb_bank_accounts WHERE owner = ? LIMIT 1")) {
-            stmt.setInt(1, profileId);
-            ResultSet rs = stmt.executeQuery();
-            return rs.next() ? rs.getString("account_number") : null;
-        }
-    }
-
-    private static String generateUniqueAccountNumber(Connection conn) throws SQLException {
-        return generateUniqueIdentifier(conn, "bb_bank_accounts", "account_number", "ACC-");
-    }
-
-    private static String generateUniqueCardNumber(Connection conn) throws SQLException {
-        return generateUniqueIdentifier(conn, "bb_bank_cards", "card_number", "CARD");
-    }
-
-    private static String generateUniqueIdentifier(Connection conn, String tableName, String columnName, String prefix)
-            throws SQLException {
-        String sql = "SELECT 1 FROM " + tableName + " WHERE " + columnName + " = ?";
-        for (int attempt = 0; attempt < 20; attempt++) {
-            String candidate = prefix + randomDigits(16);
-            try (PreparedStatement stmt = conn.prepareStatement(sql)) {
-                stmt.setString(1, candidate);
-                if (!stmt.executeQuery().next()) {
-                    return candidate;
-                }
-            }
-        }
-        throw new SQLException("Impossible de generer un identifiant unique pour " + tableName);
-    }
-
-    private static String randomDigits(int length) {
-        StringBuilder sb = new StringBuilder(length);
-        for (int i = 0; i < length; i++) {
-            sb.append(RANDOM.nextInt(10));
-        }
-        return sb.toString();
+    /** Jour in-game de l'overworld : identique quelle que soit la dimension ou se trouve le joueur. */
+    private static long currentInGameDay(Player player) {
+        MinecraftServer server = player.getServer();
+        long dayTime = server != null ? server.overworld().getDayTime() : player.level().getDayTime();
+        return dayTime / 24000L;
     }
 }

@@ -4,6 +4,7 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import org.bb.bb_economy.database.Money;
 import org.bb.bb_economy.init.ModBlockEntities;
 import org.bb.bb_economy.item.TpeItem;
 
@@ -52,6 +53,14 @@ public class TpeBlockEntity extends BlockEntity {
         setChanged();
     }
 
+    /** Un NBT corrompu ou modifie a la main ne doit ni faire planter le chargement ni creer un montant invalide. */
+    private static BigDecimal parseStoredAmount(String stored) {
+        if (stored.isBlank()) {
+            return BigDecimal.ZERO;
+        }
+        return Money.parsePositive(stored).orElse(BigDecimal.ZERO);
+    }
+
     @Override
     protected void saveAdditional(CompoundTag tag) {
         super.saveAdditional(tag);
@@ -66,6 +75,6 @@ public class TpeBlockEntity extends BlockEntity {
         companyId = tag.getString(TpeItem.TAG_COMPANY_ID);
         companyAccount = tag.getString(TpeItem.TAG_COMPANY_ACCOUNT);
         String amount = tag.getString("pending_amount");
-        pendingAmount = amount.isBlank() ? BigDecimal.ZERO : new BigDecimal(amount);
+        pendingAmount = parseStoredAmount(amount);
     }
 }

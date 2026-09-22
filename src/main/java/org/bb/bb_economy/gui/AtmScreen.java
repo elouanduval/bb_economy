@@ -160,14 +160,14 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         setMessage("Verification...", 0xAAAAAA);
     }
 
-    public void onPinResponse(boolean success, double balance) {
+    public void onPinResponse(boolean success, double balance, String responseMessage) {
         if (success) {
             currentBalance = BigDecimal.valueOf(balance);
             state = AtmState.MAIN_MENU;
             setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
             rebuildScreen();
         } else {
-            setMessage("PIN incorrect", 0xFF4444);
+            setMessage(responseMessage, 0xFF4444);
             pinInput.setLength(0);
         }
     }

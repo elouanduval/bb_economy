@@ -1,15 +1,19 @@
 package org.bb.bb_economy.network;
 
+import com.mojang.logging.LogUtils;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.init.ModNetworking;
+import org.slf4j.Logger;
 
 import java.util.function.Supplier;
 
 public class SetCardPinPacket {
+
+    private static final Logger LOGGER = LogUtils.getLogger();
 
     private final String pin;
 
@@ -30,20 +34,25 @@ public class SetCardPinPacket {
             ServerPlayer player = ctx.get().getSender();
             if (player == null) return;
 
-            boolean success;
+            boolean success = false;
             String message;
 
-            if (!BankManager.isValidPin(packet.pin)) {
-                success = false;
-                message = "Le PIN doit contenir exactement 4 chiffres.";
-            } else if (!BankManager.hasDefaultCardPin(player)) {
-                success = false;
-                message = "Aucune initialisation de PIN n'est requise actuellement.";
-            } else {
-                success = BankManager.updateCardPin(player, packet.pin);
-                message = success
-                        ? "Votre code PIN a ete enregistre."
-                        : "Impossible d'enregistrer le PIN.";
+            try {
+                if (!BankManager.isValidPin(packet.pin)) {
+                    message = "Le PIN doit contenir exactement 4 chiffres.";
+                } else if (BankManager.isDefaultPin(packet.pin)) {
+                    message = "Ce PIN est reserve. Choisissez-en un autre.";
+                } else if (!BankManager.hasDefaultCardPin(player)) {
+                    message = "Aucune initialisation de PIN n'est requise actuellement.";
+                } else {
+                    success = BankManager.updateCardPin(player, packet.pin);
+                    message = success
+                            ? "Votre code PIN a ete enregistre."
+                            : "Impossible d'enregistrer le PIN.";
+                }
+            } catch (RuntimeException e) {
+                LOGGER.error("Erreur pendant l'enregistrement du PIN de {}", player.getName().getString(), e);
+                message = "Service bancaire indisponible. Reessayez plus tard.";
             }
 
             if (success) {
