@@ -61,14 +61,6 @@ public class Config {
             BUILDER.comment("Capacite maximale d'un portefeuille en billets")
                     .defineInRange("economy.walletMaxStoredMoney", 10000, 1, Integer.MAX_VALUE);
 
-    private static final ForgeConfigSpec.IntValue SALARY_RECURRENCE_DAYS_VALUE =
-            BUILDER.comment("Nombre de jours in-game entre deux versements de salaire")
-                    .defineInRange("economy.salary.recurrenceDays", 1, 1, Integer.MAX_VALUE);
-
-    private static final ForgeConfigSpec.IntValue SALARY_RECURRENCE_TICK_VALUE =
-            BUILDER.comment("Tick in-game de versement des salaires (0 = 00:00)")
-                    .defineInRange("economy.salary.recurrenceTick", 0, 0, 23999);
-
     private static final ForgeConfigSpec.IntValue PIN_MAX_ATTEMPTS_VALUE =
             BUILDER.comment("Nombre de PIN errones avant verrouillage temporaire du compte")
                     .defineInRange("economy.pin.maxAttempts", 3, 1, 100);
@@ -93,8 +85,6 @@ public class Config {
     public static double DAILY_WITHDRAW_LIMIT;
     public static double DAILY_TRANSFER_LIMIT;
     public static int WALLET_MAX_STORED_MONEY;
-    public static int SALARY_RECURRENCE_DAYS;
-    public static int SALARY_RECURRENCE_TICK;
     public static int PIN_MAX_ATTEMPTS = 3;
     public static int PIN_LOCKOUT_SECONDS = 300;
 
@@ -114,8 +104,6 @@ public class Config {
         DAILY_WITHDRAW_LIMIT = DAILY_WITHDRAW_LIMIT_VALUE.get();
         DAILY_TRANSFER_LIMIT = DAILY_TRANSFER_LIMIT_VALUE.get();
         WALLET_MAX_STORED_MONEY = WALLET_MAX_STORED_MONEY_VALUE.get();
-        SALARY_RECURRENCE_DAYS = SALARY_RECURRENCE_DAYS_VALUE.get();
-        SALARY_RECURRENCE_TICK = SALARY_RECURRENCE_TICK_VALUE.get();
         PIN_MAX_ATTEMPTS = PIN_MAX_ATTEMPTS_VALUE.get();
         PIN_LOCKOUT_SECONDS = PIN_LOCKOUT_SECONDS_VALUE.get();
     }

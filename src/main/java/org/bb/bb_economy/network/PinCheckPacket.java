@@ -1,6 +1,5 @@
 package org.bb.bb_economy.network;
 
-import com.mojang.logging.LogUtils;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
@@ -8,13 +7,10 @@ import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.gui.AtmScreenHandler;
 import org.bb.bb_economy.gui.TpeScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
-import org.slf4j.Logger;
 
 import java.util.function.Supplier;
 
 public class PinCheckPacket {
-
-    private static final Logger LOGGER = LogUtils.getLogger();
 
     private final int pin;
 
@@ -50,19 +46,18 @@ public class PinCheckPacket {
                 return;
             }
 
-            try {
-                BankManager.PinCheck check = BankManager.checkPin(player, packet.getPin());
-                boolean pinOk = check.isOk();
-                if (atmMenu != null) {
-                    atmMenu.setPinValidated(pinOk);
-                } else {
-                    tpeMenu.setPinValidated(pinOk);
-                }
-                double balance = pinOk ? BankManager.balanceOrZero(player).doubleValue() : 0;
-                sendResponse(player, pinOk, balance, check.message());
-            } catch (RuntimeException e) {
-                LOGGER.error("Erreur pendant la verification du PIN de {}", player.getName().getString(), e);
-                sendResponse(player, false, 0, "Service bancaire indisponible. Reessayez plus tard.");
+            // A l'ATM, le PIN verifie est celui de la carte en main (perso ou entreprise), pas forcement
+            // le compte personnel du profil actif. Au TPE, l'acheteur paie toujours depuis son compte perso.
+            if (atmMenu != null) {
+                BankManager.checkCardPin(player, atmMenu.getCardNumber(), atmMenu.getAccountNumber(), packet.getPin(), outcome -> {
+                    atmMenu.setPinValidated(outcome.check().isOk());
+                    sendResponse(player, outcome.check().isOk(), outcome.balance().doubleValue(), outcome.check().message());
+                });
+            } else {
+                BankManager.checkPin(player, packet.getPin(), outcome -> {
+                    tpeMenu.setPinValidated(outcome.check().isOk());
+                    sendResponse(player, outcome.check().isOk(), outcome.balance().doubleValue(), outcome.check().message());
+                });
             }
         });
         ctx.get().setPacketHandled(true);

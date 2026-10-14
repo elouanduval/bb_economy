@@ -13,9 +13,12 @@ import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.BlockHitResult;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.gui.AtmScreenHandler;
+
+import java.util.Optional;
 
 public class AtmBlock extends Block {
 
@@ -40,11 +43,21 @@ public class AtmBlock extends Block {
     public InteractionResult use(BlockState state, Level level, BlockPos pos,
                                  Player player, InteractionHand hand, BlockHitResult hit) {
         if (!level.isClientSide) {
-            if (BankManager.hasOwnedCardInHand(player)) {
-                AtmScreenHandler.open(player, pos);
-            } else {
-                player.displayClientMessage(Component.literal("Vous devez utiliser votre carte bancaire !"), true);
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.SUCCESS;
             }
+            Optional<String> cardNumber = BankManager.genuineCardInHand(player);
+            if (cardNumber.isEmpty()) {
+                player.displayClientMessage(Component.literal("Vous devez tenir une carte bancaire en main !"), true);
+                return InteractionResult.SUCCESS;
+            }
+            BankManager.resolveCardAccount(serverPlayer, cardNumber.get(), accountNumber -> {
+                if (accountNumber.isEmpty()) {
+                    player.displayClientMessage(Component.literal("Cette carte n'est liee a aucun compte."), true);
+                    return;
+                }
+                AtmScreenHandler.open(player, pos, cardNumber.get(), accountNumber.get());
+            });
         }
         return InteractionResult.SUCCESS;
     }
