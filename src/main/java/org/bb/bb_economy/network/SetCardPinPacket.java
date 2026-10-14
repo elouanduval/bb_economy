@@ -1,19 +1,16 @@
 package org.bb.bb_economy.network;
 
-import com.mojang.logging.LogUtils;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
 import org.bb.bb_economy.database.BankManager;
+import org.bb.bb_economy.gui.AtmScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
-import org.slf4j.Logger;
 
 import java.util.function.Supplier;
 
 public class SetCardPinPacket {
-
-    private static final Logger LOGGER = LogUtils.getLogger();
 
     private final String pin;
 
@@ -34,37 +31,47 @@ public class SetCardPinPacket {
             ServerPlayer player = ctx.get().getSender();
             if (player == null) return;
 
-            boolean success = false;
-            String message;
-
-            try {
-                if (!BankManager.isValidPin(packet.pin)) {
-                    message = "Le PIN doit contenir exactement 4 chiffres.";
-                } else if (BankManager.isDefaultPin(packet.pin)) {
-                    message = "Ce PIN est reserve. Choisissez-en un autre.";
-                } else if (!BankManager.hasDefaultCardPin(player)) {
-                    message = "Aucune initialisation de PIN n'est requise actuellement.";
-                } else {
-                    success = BankManager.updateCardPin(player, packet.pin);
-                    message = success
-                            ? "Votre code PIN a ete enregistre."
-                            : "Impossible d'enregistrer le PIN.";
-                }
-            } catch (RuntimeException e) {
-                LOGGER.error("Erreur pendant l'enregistrement du PIN de {}", player.getName().getString(), e);
-                message = "Service bancaire indisponible. Reessayez plus tard.";
+            if (!BankManager.isValidPin(packet.pin)) {
+                sendResponse(player, false, "Le PIN doit contenir exactement 4 chiffres.");
+                return;
+            }
+            if (BankManager.isDefaultPin(packet.pin)) {
+                sendResponse(player, false, "Ce PIN est reserve. Choisissez-en un autre.");
+                return;
             }
 
-            if (success) {
-                player.displayClientMessage(Component.literal(message), false);
+            if (player.containerMenu instanceof AtmScreenHandler atmMenu && atmMenu.stillValid(player) && atmMenu.isPinValidated()) {
+                // Change le PIN de la carte tenue en main a l'ATM (deja authentifiee) : fonctionne aussi
+                // bien pour une carte personnelle que pour une carte d'entreprise, et a tout moment (pas
+                // seulement quand le PIN est encore celui par defaut).
+                BankManager.updateCardPinByNumber(player, atmMenu.getCardNumber(), packet.pin, success -> {
+                    String message = success ? "Le PIN de cette carte a ete change." : "Impossible de changer le PIN.";
+                    if (success) player.displayClientMessage(Component.literal(message), false);
+                    sendResponse(player, success, message);
+                });
+                return;
             }
 
-            ModNetworking.CHANNEL.sendTo(
-                    new SetCardPinResponsePacket(success, message),
-                    player.connection.connection,
-                    net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
-            );
+            BankManager.initPersonalPin(player, packet.pin, outcome -> {
+                boolean success = outcome == BankManager.InitPinResult.SAVED;
+                String message = switch (outcome) {
+                    case SAVED -> "Votre code PIN a ete enregistre.";
+                    case FAILED -> "Impossible d'enregistrer le PIN.";
+                    case NOT_REQUIRED -> "Aucune initialisation de PIN n'est requise actuellement.";
+                    case ERROR -> "Service bancaire indisponible. Reessayez plus tard.";
+                };
+                if (success) player.displayClientMessage(Component.literal(message), false);
+                sendResponse(player, success, message);
+            });
         });
         ctx.get().setPacketHandled(true);
+    }
+
+    private static void sendResponse(ServerPlayer player, boolean success, String message) {
+        ModNetworking.CHANNEL.sendTo(
+                new SetCardPinResponsePacket(success, message),
+                player.connection.connection,
+                net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
+        );
     }
 }

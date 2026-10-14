@@ -24,7 +24,7 @@ import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.bb.bb_economy.client.ClientSetup;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.database.DatabaseManager;
-import org.bb.bb_economy.database.SalaryScheduler;
+import org.bb.bb_economy.database.DbExecutor;
 import org.bb.bb_economy.init.ModBlockEntities;
 import org.bb.bb_economy.init.ModBlocks;
 import org.bb.bb_economy.init.ModItems;
@@ -32,6 +32,7 @@ import org.bb.bb_economy.init.ModMenus;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.item.TpeItem;
 import org.bb.bb_economy.network.OpenPinSetupPacket;
+import org.bb.bb_economy.perms.JobService;
 
 import org.slf4j.Logger;
 
@@ -56,7 +57,6 @@ public class BB_Economy {
         ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, Config.SPEC);
 
         MinecraftForge.EVENT_BUS.register(new ForgeEvents());
-        MinecraftForge.EVENT_BUS.register(new SalaryScheduler());
 
         ClientSetup.init();
 
@@ -70,6 +70,10 @@ public class BB_Economy {
                 "/bb_economy bank create <joueur> - Cree un compte bancaire et une carte pour le joueur",
                 "/bb_economy bank reissue_card <joueur> - Redonne au joueur sa carte bancaire en reinitialisant le PIN",
                 "/bb_economy card regive <joueur> - Redonne au joueur sa carte bancaire liee a son compte",
+                "/bb_economy company create <company_id> <joueur> - Cree le compte bancaire d'une entreprise, rattache a un joueur. "
+                        + "Creez ensuite un groupe LuckPerms de meme nom (insensible a la casse) et ajoutez-y les salaries.",
+                "/bb_economy company give_card <company_id> <joueur> - Emet une nouvelle carte (PIN par defaut) liee au compte "
+                        + "de l'entreprise et la donne au joueur. Plusieurs cartes peuvent coexister pour la meme entreprise.",
                 "/give <joueur> bb_economy:card - Donne une carte bancaire item",
                 "/give <joueur> bb_economy:money <quantite> - Donne des billets",
                 "/give <joueur> bb_economy:wallet - Donne un portefeuille",
@@ -81,10 +85,14 @@ public class BB_Economy {
         public void onServerStarting(ServerStartingEvent event) {
             DatabaseManager.init();
             LOGGER.info("BDD initialisee.");
+            JobService.init();
         }
 
         @SubscribeEvent
         public void onServerStopping(ServerStoppingEvent event) {
+            // On arrete d'abord d'accepter de nouvelles requetes en arriere-plan (celles deja en vol finissent),
+            // puis on ferme le pool de connexions.
+            DbExecutor.shutdown();
             DatabaseManager.close();
         }
 
@@ -142,6 +150,23 @@ public class BB_Economy {
                                                     ctx.getSource(),
                                                     EntityArgument.getPlayer(ctx, "player")
                                             )))))
+                    .then(Commands.literal("company")
+                            .then(Commands.literal("create")
+                                    .then(Commands.argument("company_id", StringArgumentType.word())
+                                            .then(Commands.argument("owner", EntityArgument.player())
+                                                    .executes(ctx -> createCompany(
+                                                            ctx.getSource(),
+                                                            StringArgumentType.getString(ctx, "company_id"),
+                                                            EntityArgument.getPlayer(ctx, "owner")
+                                                    )))))
+                            .then(Commands.literal("give_card")
+                                    .then(Commands.argument("company_id", StringArgumentType.word())
+                                            .then(Commands.argument("player", EntityArgument.player())
+                                                    .executes(ctx -> giveCompanyCard(
+                                                            ctx.getSource(),
+                                                            StringArgumentType.getString(ctx, "company_id"),
+                                                            EntityArgument.getPlayer(ctx, "player")
+                                                    ))))))
                     .then(Commands.literal("give")
                             .then(Commands.literal("tpe")
                                     .then(Commands.argument("company_id", StringArgumentType.word())
@@ -241,6 +266,71 @@ public class BB_Economy {
             );
             target.displayClientMessage(
                     Component.literal("Votre carte bancaire (" + cardNumber + ") vous a ete redonnee. Choisissez maintenant un nouveau PIN."),
+                    false
+            );
+            return 1;
+        }
+
+        private int createCompany(CommandSourceStack source, String rawCompanyId, ServerPlayer owner) {
+            final String companyId;
+            try {
+                companyId = BankManager.normalizeCompanyId(rawCompanyId);
+            } catch (IllegalArgumentException e) {
+                source.sendFailure(Component.literal("Identifiant d'entreprise invalide."));
+                return 0;
+            }
+
+            final String accountNumber;
+            try {
+                accountNumber = BankManager.createCompanyAccount(companyId, owner);
+            } catch (IllegalStateException e) {
+                source.sendFailure(Component.literal("Cette entreprise existe deja : " + companyId));
+                return 0;
+            } catch (RuntimeException e) {
+                source.sendFailure(Component.literal("Creation de l'entreprise impossible : " + e.getMessage()));
+                return 0;
+            }
+
+            String luckPermsGroup = companyId.toLowerCase(java.util.Locale.ROOT);
+            source.sendSuccess(
+                    () -> Component.literal("Entreprise " + companyId + " creee (compte " + accountNumber + "), rattachee a "
+                            + owner.getName().getString() + ". Creez le groupe LuckPerms \"" + luckPermsGroup
+                            + "\" et ajoutez-y les salaries."),
+                    true
+            );
+            return 1;
+        }
+
+        private int giveCompanyCard(CommandSourceStack source, String rawCompanyId, ServerPlayer target) {
+            final String companyId;
+            try {
+                companyId = BankManager.normalizeCompanyId(rawCompanyId);
+            } catch (IllegalArgumentException e) {
+                source.sendFailure(Component.literal("Identifiant d'entreprise invalide."));
+                return 0;
+            }
+
+            if (!BankManager.companyExists(companyId)) {
+                source.sendFailure(Component.literal("Entreprise introuvable : " + companyId));
+                return 0;
+            }
+
+            final String cardNumber;
+            try {
+                cardNumber = BankManager.issueCompanyCard(companyId, target);
+            } catch (RuntimeException e) {
+                source.sendFailure(Component.literal("Emission de la carte impossible : " + e.getMessage()));
+                return 0;
+            }
+
+            source.sendSuccess(
+                    () -> Component.literal("Carte " + cardNumber + " de l'entreprise " + companyId + " donnee a "
+                            + target.getName().getString() + "."),
+                    true
+            );
+            target.displayClientMessage(
+                    Component.literal("Vous avez recu une carte bancaire (" + cardNumber + ") de l'entreprise " + companyId
+                            + ". Changez son PIN par defaut depuis l'ATM."),
                     false
             );
             return 1;

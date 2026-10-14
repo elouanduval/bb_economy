@@ -8,6 +8,7 @@ import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.Config;
 import org.bb.bb_economy.init.ModItems;
 import org.bb.bb_economy.item.CardItem;
+import org.bb.bb_economy.perms.JobService;
 import org.slf4j.Logger;
 
 import java.math.BigDecimal;
@@ -19,14 +20,15 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * Facade cote Minecraft : traduit joueurs, inventaires et items en operations sur {@link BankLedger}.
  * Toute la logique monetaire (verrous, plafonds, atomicite) vit dans le ledger ; ici on gere
  * l'identification du joueur, les billets et les cartes/PIN.
  *
- * Ces methodes touchent a l'inventaire et doivent donc etre appelees depuis le thread serveur
- * (sauf {@link #processSalaries}, qui ne manipule que la base).
+ * Ces methodes touchent a l'inventaire et doivent donc etre appelees depuis le thread serveur.
  */
 public final class BankManager {
 
@@ -40,7 +42,7 @@ public final class BankManager {
     /** Resultat d'une verification de PIN. */
     public record PinCheck(Status status, int attemptsLeft, long lockSeconds) {
 
-        public enum Status { OK, WRONG, LOCKED, NO_CARD }
+        public enum Status { OK, WRONG, LOCKED, NO_CARD, ERROR }
 
         public boolean isOk() {
             return status == Status.OK;
@@ -54,7 +56,12 @@ public final class BankManager {
                         : "PIN incorrect. Compte verrouille pendant " + formatDuration(lockSeconds) + ".";
                 case LOCKED -> "Trop d'essais. Reessayez dans " + formatDuration(lockSeconds) + ".";
                 case NO_CARD -> "Aucune carte bancaire disponible.";
+                case ERROR -> TxResult.SERVICE_UNAVAILABLE.message();
             };
+        }
+
+        public static PinCheck error() {
+            return new PinCheck(Status.ERROR, 0, 0);
         }
 
         private static String formatDuration(long seconds) {
@@ -105,11 +112,19 @@ public final class BankManager {
     // Profil actif (table geree par l'autre mod)
     // -------------------------------------------------------------------------
 
-    /** Retourne l'id du profil actif du joueur, ou -1 s'il n'en a pas. */
-    public static int getActiveProfileId(Player player) {
+    /**
+     * Retourne l'id du profil actif du joueur, ou -1 s'il n'en a pas.
+     * Version {@code UUID} : c'est celle-ci qui fait l'appel base, appelable depuis un thread d'arriere-plan
+     * (voir {@link DbExecutor}) puisqu'elle ne touche a aucun objet {@link Player}.
+     */
+    public static int getActiveProfileId(UUID playerUuid) {
         return query("SELECT active_profile FROM mc_accounts WHERE uuid = ?",
-                stmt -> stmt.setString(1, player.getUUID().toString()),
+                stmt -> stmt.setString(1, playerUuid.toString()),
                 rs -> rs.next() && rs.getObject(1) != null ? rs.getInt(1) : -1);
+    }
+
+    public static int getActiveProfileId(Player player) {
+        return getActiveProfileId(player.getUUID());
     }
 
     public static boolean hasActiveProfile(Player player) {
@@ -139,22 +154,6 @@ public final class BankManager {
                 .orElseThrow(() -> new BankException("Compte introuvable pour le profil " + profileId));
     }
 
-    /** Solde du compte personnel, ou vide si le joueur n'a ni profil actif ni compte. */
-    public static Optional<BigDecimal> findBalance(Player player) {
-        int profileId = getActiveProfileId(player);
-        return profileId == -1 ? Optional.empty() : LEDGER.findPersonalBalance(profileId);
-    }
-
-    /** Solde pour l'affichage : 0 si le compte est introuvable ou la base indisponible. */
-    public static BigDecimal balanceOrZero(Player player) {
-        try {
-            return findBalance(player).orElse(BigDecimal.ZERO);
-        } catch (BankException e) {
-            LOGGER.error("Lecture du solde impossible pour {}", player.getName().getString(), e);
-            return BigDecimal.ZERO;
-        }
-    }
-
     // -------------------------------------------------------------------------
     // Entreprises
     // -------------------------------------------------------------------------
@@ -176,16 +175,12 @@ public final class BankManager {
                 });
     }
 
-    /** Sera remplace par une verification LuckPerms ; garde ici pour l'instant (table bb_jobs). */
+    /**
+     * Vrai si le joueur est salarie de cette entreprise, c'est-a-dire membre du groupe LuckPerms du meme
+     * nom (voir {@link JobService}). Sans LuckPerms installe, personne n'est jamais reconnu comme salarie.
+     */
     public static boolean playerWorksForCompany(Player player, String companyId) {
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1) return false;
-        return query("SELECT 1 FROM bb_jobs WHERE owner = ? AND company_id = ? LIMIT 1",
-                stmt -> {
-                    stmt.setInt(1, profileId);
-                    stmt.setString(2, normalizeCompanyId(companyId));
-                },
-                ResultSet::next);
+        return JobService.isMemberOfCompany(player.getUUID(), normalizeCompanyId(companyId));
     }
 
     // -------------------------------------------------------------------------
@@ -209,11 +204,16 @@ public final class BankManager {
                 });
     }
 
-    public static boolean hasDefaultCardPin(Player player) {
-        int profileId = getActiveProfileId(player);
+    /** Version {@code UUID}, appelable depuis un thread d'arriere-plan. */
+    public static boolean hasDefaultCardPin(UUID playerUuid) {
+        int profileId = getActiveProfileId(playerUuid);
         if (profileId == -1) return false;
         String defaultPin = defaultPin();
         return loadCards(profileId).stream().anyMatch(card -> PinHasher.verify(defaultPin, card.pinHash()));
+    }
+
+    public static boolean hasDefaultCardPin(Player player) {
+        return hasDefaultCardPin(player.getUUID());
     }
 
     public static String getCardNumber(Player player) {
@@ -225,33 +225,63 @@ public final class BankManager {
         return cards.get(0).cardNumber();
     }
 
-    public static boolean playerOwnsCard(Player player, String cardNumber) {
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1 || cardNumber == null || cardNumber.isBlank()) return false;
+    /** Version {@code UUID}, appelable depuis un thread d'arriere-plan. */
+    public static boolean playerOwnsCard(UUID playerUuid, String cardNumber) {
+        if (cardNumber == null || cardNumber.isBlank()) return false;
+        int profileId = getActiveProfileId(playerUuid);
+        if (profileId == -1) return false;
         return loadCards(profileId).stream().anyMatch(card -> card.cardNumber().equals(cardNumber));
     }
 
-    /**
-     * Vrai si le joueur tient (main ou seconde main) une carte qui lui appartient.
-     * En cas d'erreur de base de donnees on refuse plutot que de laisser passer.
-     */
-    public static boolean hasOwnedCardInHand(Player player) {
-        try {
-            return isOwnedCard(player, player.getMainHandItem()) || isOwnedCard(player, player.getOffhandItem());
-        } catch (BankException e) {
-            LOGGER.error("Verification de la carte impossible pour {}", player.getName().getString(), e);
-            return false;
+    public static boolean playerOwnsCard(Player player, String cardNumber) {
+        return playerOwnsCard(player.getUUID(), cardNumber);
+    }
+
+    /** Numeros de carte tenus en main (sans verifier l'appartenance), a capturer sur le thread principal. */
+    public record HandCards(Optional<String> mainHand, Optional<String> offHand) {
+        public boolean isEmpty() {
+            return mainHand.isEmpty() && offHand.isEmpty();
         }
     }
 
-    private static boolean isOwnedCard(Player player, ItemStack stack) {
-        if (stack.getItem() != ModItems.CARD.get()) return false;
-        String cardNumber = CardItem.getCardNumber(stack);
-        return !cardNumber.isBlank() && playerOwnsCard(player, cardNumber);
+    public static HandCards cardsInHand(Player player) {
+        return new HandCards(firstCardNumber(player.getMainHandItem()), firstCardNumber(player.getOffhandItem()));
     }
 
-    public static PinCheck checkPin(Player player, int pin) {
-        int profileId = getActiveProfileId(player);
+    /**
+     * Vrai si l'une des deux cartes capturees par {@link #cardsInHand} appartient au joueur.
+     * Appelable depuis un thread d'arriere-plan (aucun objet {@link Player} n'est touche ici).
+     */
+    public static boolean ownsAnyOf(UUID playerUuid, HandCards cards) {
+        return cards.mainHand().map(card -> playerOwnsCard(playerUuid, card)).orElse(false)
+                || cards.offHand().map(card -> playerOwnsCard(playerUuid, card)).orElse(false);
+    }
+
+    /**
+     * Numero d'une carte bancaire tenue en main (principale ou secondaire), sans verifier a qui elle
+     * appartient. Sert uniquement a ouvrir l'ATM : le compte concret est resolu ensuite via
+     * {@link #resolveCardAccount(String)}, et savoir operer dessus reste soumis au PIN de cette carte.
+     * Une carte d'entreprise n'est pas liee a un seul profil (plusieurs employes peuvent en avoir une
+     * copie), donc {@link #playerOwnsCard} ne peut pas servir de filtre ici.
+     */
+    public static Optional<String> genuineCardInHand(Player player) {
+        return firstCardNumber(player.getMainHandItem()).or(() -> firstCardNumber(player.getOffhandItem()));
+    }
+
+    private static Optional<String> firstCardNumber(ItemStack stack) {
+        if (stack.getItem() != ModItems.CARD.get()) return Optional.empty();
+        String cardNumber = CardItem.getCardNumber(stack);
+        return cardNumber.isBlank() ? Optional.empty() : Optional.of(cardNumber);
+    }
+
+    /** Numero de compte associe a une carte, si elle existe reellement en base. */
+    public static Optional<String> resolveCardAccount(String cardNumber) {
+        return LEDGER.accountNumberForCard(cardNumber);
+    }
+
+    /** Version {@code UUID}, appelable depuis un thread d'arriere-plan. */
+    public static PinCheck checkPin(UUID playerUuid, int pin) {
+        int profileId = getActiveProfileId(playerUuid);
         if (profileId == -1) return new PinCheck(PinCheck.Status.NO_CARD, 0, 0);
         Optional<String> account = LEDGER.findPersonalAccountNumber(profileId);
         if (account.isEmpty()) return new PinCheck(PinCheck.Status.NO_CARD, 0, 0);
@@ -281,8 +311,48 @@ public final class BankManager {
         return recordFailedPin(accountNumber);
     }
 
-    private static PinCheck recordFailedPin(String accountNumber) {
-        int left = PIN_ATTEMPTS.recordFailure(accountNumber, Config.PIN_MAX_ATTEMPTS, Config.PIN_LOCKOUT_SECONDS * 1000L);
+    public static PinCheck checkPin(Player player, int pin) {
+        return checkPin(player.getUUID(), pin);
+    }
+
+    /**
+     * Verifie le PIN d'une carte precise (pas "toutes les cartes du profil"), pour l'ATM quand la carte
+     * en main est celle d'une entreprise. Les tentatives sont comptees par carte : bloquer une carte
+     * d'entreprise ne bloque pas les autres cartes du meme compte.
+     */
+    public static PinCheck checkCardPin(String cardNumber, int pin) {
+        Optional<String> pinHash = cardPinHash(cardNumber);
+        if (pinHash.isEmpty()) {
+            return new PinCheck(PinCheck.Status.NO_CARD, 0, 0);
+        }
+
+        long locked = PIN_ATTEMPTS.remainingLockSeconds(cardNumber);
+        if (locked > 0) {
+            return new PinCheck(PinCheck.Status.LOCKED, 0, locked);
+        }
+        if (pin < 0 || pin > 9999) {
+            return recordFailedPin(cardNumber);
+        }
+
+        String candidate = String.format("%04d", pin);
+        if (PinHasher.verify(candidate, pinHash.get())) {
+            PIN_ATTEMPTS.reset(cardNumber);
+            if (PinHasher.needsUpgrade(pinHash.get())) {
+                upgradePinHash(cardNumber, candidate);
+            }
+            return new PinCheck(PinCheck.Status.OK, 0, 0);
+        }
+        return recordFailedPin(cardNumber);
+    }
+
+    private static Optional<String> cardPinHash(String cardNumber) {
+        return query("SELECT card_pin FROM bb_bank_cards WHERE card_number = ?",
+                stmt -> stmt.setString(1, cardNumber),
+                rs -> rs.next() ? Optional.of(rs.getString(1)) : Optional.empty());
+    }
+
+    private static PinCheck recordFailedPin(String key) {
+        int left = PIN_ATTEMPTS.recordFailure(key, Config.PIN_MAX_ATTEMPTS, Config.PIN_LOCKOUT_SECONDS * 1000L);
         return new PinCheck(PinCheck.Status.WRONG, left, left == 0 ? Config.PIN_LOCKOUT_SECONDS : 0);
     }
 
@@ -297,9 +367,10 @@ public final class BankManager {
         }
     }
 
-    public static boolean updateCardPin(Player player, String pin) {
+    /** Version {@code UUID}, appelable depuis un thread d'arriere-plan. */
+    public static boolean updateCardPin(UUID playerUuid, String pin) {
         if (!isValidPin(pin)) return false;
-        int profileId = getActiveProfileId(player);
+        int profileId = getActiveProfileId(playerUuid);
         if (profileId == -1) return false;
         Optional<String> account = LEDGER.findPersonalAccountNumber(profileId);
         if (account.isEmpty()) return false;
@@ -315,8 +386,29 @@ public final class BankManager {
         return rows > 0;
     }
 
+    public static boolean updateCardPin(Player player, String pin) {
+        return updateCardPin(player.getUUID(), pin);
+    }
+
     public static boolean resetCardPinToDefault(Player player) {
         return updateCardPin(player, defaultPin());
+    }
+
+    /**
+     * Change le PIN d'une carte precise (contrairement a {@link #updateCardPin}, qui changerait le PIN
+     * de TOUTES les cartes du compte personnel). Utilise par l'ATM : on ne modifie que la carte tenue en
+     * main, pour que deux cartes d'un meme compte entreprise gardent chacune leur propre PIN.
+     */
+    public static boolean updateCardPinByNumber(String cardNumber, String pin) {
+        if (!isValidPin(pin) || isDefaultPin(pin)) return false;
+        int rows = update("UPDATE bb_bank_cards SET card_pin = ? WHERE card_number = ?", stmt -> {
+            stmt.setString(1, PinHasher.hash(pin));
+            stmt.setString(2, cardNumber);
+        });
+        if (rows > 0) {
+            PIN_ATTEMPTS.reset(cardNumber);
+        }
+        return rows > 0;
     }
 
     /** Cree le compte personnel et la carte, puis remet les objets prevus par la configuration. */
@@ -360,104 +452,328 @@ public final class BankManager {
     // -------------------------------------------------------------------------
     // Operations d'argent
     // -------------------------------------------------------------------------
+    // Deposit/retrait/virement "sur le compte personnel du profil actif" n'existent plus ici : l'ATM
+    // resout desormais toujours le compte a partir de la carte tenue en main (voir depositToAccount et
+    // consorts, plus bas), y compris pour le cas normal ou cette carte est la carte personnelle du joueur.
 
     /**
-     * Depot de billets. Les billets sont retires AVANT le credit : si le serveur s'arrete entre les deux,
-     * le joueur perd des billets au lieu d'en dupliquer. Ils sont rendus si le depot est refuse.
+     * Version {@code UUID}/{@code inGameDay}, appelable depuis un thread d'arriere-plan : {@code inGameDay}
+     * doit avoir ete capture sur le thread principal (voir {@link #currentInGameDay}, qui touche au serveur).
      */
-    public static TxResult deposit(Player player, BigDecimal amount) {
-        if (!Money.isValid(amount) || !Money.isWhole(amount)) return TxResult.INVALID_AMOUNT;
-        int profileId = getActiveProfileId(player);
+    public static TxResult processTpePayment(UUID buyerUuid, String companyAccount, BigDecimal amount, long inGameDay) {
+        int profileId = getActiveProfileId(buyerUuid);
         if (profileId == -1) return TxResult.NO_ACCOUNT;
-
-        int bills = Money.toBills(amount);
-        if (countBills(player) < bills) return TxResult.NOT_ENOUGH_CASH;
-
-        removeBills(player, bills);
-        final TxResult result;
-        try {
-            result = LEDGER.deposit(profileId, amount, dailyLimit(Config.DAILY_DEPOSIT_LIMIT), currentInGameDay(player));
-        } catch (RuntimeException e) {
-            addMoneyStacks(player, bills);
-            syncInventory(player);
-            throw e;
-        }
-        if (!result.isOk()) {
-            addMoneyStacks(player, bills);
-        }
-        syncInventory(player);
-        return result;
-    }
-
-    /** Retrait de billets : le compte est debite puis les billets sont remis (ou jetes au sol si l'inventaire est plein). */
-    public static TxResult withdraw(Player player, BigDecimal amount) {
-        if (!Money.isValid(amount) || !Money.isWhole(amount)) return TxResult.INVALID_AMOUNT;
-        int profileId = getActiveProfileId(player);
-        if (profileId == -1) return TxResult.NO_ACCOUNT;
-
-        TxResult result = LEDGER.withdraw(profileId, amount, dailyLimit(Config.DAILY_WITHDRAW_LIMIT), currentInGameDay(player));
-        if (result.isOk()) {
-            addMoneyStacks(player, Money.toBills(amount));
-            syncInventory(player);
-        }
-        return result;
-    }
-
-    public static TxResult transfer(Player fromPlayer, String toAccountNumber, BigDecimal amount) {
-        int profileId = getActiveProfileId(fromPlayer);
-        if (profileId == -1) return TxResult.NO_ACCOUNT;
-        return LEDGER.transfer(profileId, toAccountNumber, amount, dailyLimit(Config.DAILY_TRANSFER_LIMIT),
-                currentInGameDay(fromPlayer));
+        return LEDGER.payTpe(profileId, companyAccount, amount, inGameDay);
     }
 
     public static TxResult processTpePayment(Player buyer, String companyAccount, BigDecimal amount) {
-        int profileId = getActiveProfileId(buyer);
-        if (profileId == -1) return TxResult.NO_ACCOUNT;
-        return LEDGER.payTpe(profileId, companyAccount, amount, currentInGameDay(buyer));
+        return processTpePayment(buyer.getUUID(), companyAccount, amount, currentInGameDay(buyer));
     }
 
-    /** Verse les salaires dus a ce tick. Appele hors thread serveur : ne touche qu'a la base. */
-    public static void processSalaries(long currentDayTime) {
-        int tick = (int) (currentDayTime % 24000);
-        long inGameDay = currentDayTime / 24000L;
+    // Ces trois operations sont les plus frequentes du mod (chaque action ATM) : seul l'appel base part
+    // sur un thread d'arriere-plan (DbExecutor), tout ce qui touche a l'inventaire ou au joueur reste sur
+    // le thread principal, avant l'appel (retrait des billets) et apres (callback, toujours re-hopped
+    // via player.getServer()). onResult n'est jamais appele si le joueur s'est deconnecte entre-temps :
+    // l'argent est deja correctement a jour en base de toute facon, inutile de toucher un joueur parti.
+    //
+    // Le solde est relu dans la MEME requete en arriere-plan (pas apres coup sur le thread principal) :
+    // ca evite un deuxieme aller-retour SQL bloquant juste pour l'affichage.
 
-        record Salary(String jobId, BigDecimal amount, int profileId, String companyAccount) {
+    /** Resultat d'une operation d'argent, avec le solde a jour du compte concerne. */
+    public record MoneyResult(TxResult result, BigDecimal balance) {
+    }
+
+    /**
+     * Depot sur un compte quelconque (celui de la carte tenue en main a l'ATM), pas forcement le compte
+     * personnel du joueur. Les billets sont retires AVANT le credit (sur le thread principal), et rendus
+     * si le depot est refuse ou si la base est indisponible.
+     */
+    public static void depositToAccount(ServerPlayer player, String accountNumber, BigDecimal amount, Consumer<MoneyResult> onResult) {
+        if (!Money.isValid(amount) || !Money.isWhole(amount)) {
+            onResult.accept(new MoneyResult(TxResult.INVALID_AMOUNT, accountBalanceOrZero(accountNumber)));
+            return;
         }
+        int bills = Money.toBills(amount);
+        if (countBills(player) < bills) {
+            onResult.accept(new MoneyResult(TxResult.NOT_ENOUGH_CASH, accountBalanceOrZero(accountNumber)));
+            return;
+        }
+        removeBills(player, bills);
+        syncInventory(player);
 
-        final List<Salary> due;
-        try {
-            due = query("SELECT j.job_id, j.job_salary, j.owner, c.account_number " +
-                            "FROM bb_jobs j JOIN bb_companies c ON j.company_id = c.company_id " +
-                            "WHERE j.job_salary_time = ?",
-                    stmt -> stmt.setInt(1, tick),
-                    rs -> {
-                        List<Salary> rows = new ArrayList<>();
-                        while (rs.next()) {
-                            rows.add(new Salary(rs.getString(1), rs.getBigDecimal(2), rs.getInt(3), rs.getString(4)));
-                        }
-                        return rows;
-                    });
-        } catch (BankException e) {
-            LOGGER.error("Lecture des salaires impossible", e);
+        long inGameDay = currentInGameDay(player);
+        BigDecimal limit = dailyLimit(Config.DAILY_DEPOSIT_LIMIT);
+
+        DbExecutor.supply(() -> {
+            TxResult result = LEDGER.deposit(accountNumber, amount, limit, inGameDay);
+            return new MoneyResult(result, LEDGER.findBalance(accountNumber).orElse(BigDecimal.ZERO));
+        }).whenCompleteAsync((outcome, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                outcome = new MoneyResult(logAndConvert(error, player, "depot"), BigDecimal.ZERO);
+            }
+            if (!outcome.result().isOk()) {
+                addMoneyStacks(player, bills);
+                syncInventory(player);
+            }
+            onResult.accept(outcome);
+        }, player.getServer());
+    }
+
+    /** Retrait sur un compte quelconque (celui de la carte tenue en main a l'ATM). */
+    public static void withdrawFromAccount(ServerPlayer player, String accountNumber, BigDecimal amount, Consumer<MoneyResult> onResult) {
+        if (!Money.isValid(amount) || !Money.isWhole(amount)) {
+            onResult.accept(new MoneyResult(TxResult.INVALID_AMOUNT, accountBalanceOrZero(accountNumber)));
             return;
         }
 
-        for (Salary salary : due) {
-            try {
-                Optional<String> playerAccount = LEDGER.findPersonalAccountNumber(salary.profileId());
-                if (playerAccount.isEmpty() || !Money.isValid(salary.amount())) continue;
+        long inGameDay = currentInGameDay(player);
+        BigDecimal limit = dailyLimit(Config.DAILY_WITHDRAW_LIMIT);
 
-                TxResult result = LEDGER.transferBetweenAccounts(salary.companyAccount(), playerAccount.get(),
-                        salary.amount(), BankLedger.TYPE_SALARY, inGameDay);
-                if (result.isOk()) {
-                    LOGGER.info("Salaire verse : {} de {} vers {}", salary.amount(), salary.companyAccount(), playerAccount.get());
-                } else {
-                    LOGGER.warn("Salaire non verse pour le job {} : {}", salary.jobId(), result.message());
-                }
-            } catch (BankException e) {
-                LOGGER.error("Erreur de versement du salaire pour le job {}", salary.jobId(), e);
+        DbExecutor.supply(() -> {
+            TxResult result = LEDGER.withdraw(accountNumber, amount, limit, inGameDay);
+            return new MoneyResult(result, LEDGER.findBalance(accountNumber).orElse(BigDecimal.ZERO));
+        }).whenCompleteAsync((outcome, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                outcome = new MoneyResult(logAndConvert(error, player, "retrait"), BigDecimal.ZERO);
             }
+            if (outcome.result().isOk()) {
+                addMoneyStacks(player, Money.toBills(amount));
+                syncInventory(player);
+            }
+            onResult.accept(outcome);
+        }, player.getServer());
+    }
+
+    /** Virement depuis un compte quelconque (celui de la carte tenue en main a l'ATM). Ne touche pas a l'inventaire. */
+    public static void transferFromAccount(ServerPlayer player, String fromAccountNumber, String toAccountNumber,
+                                            BigDecimal amount, Consumer<MoneyResult> onResult) {
+        long inGameDay = currentInGameDay(player);
+        BigDecimal limit = dailyLimit(Config.DAILY_TRANSFER_LIMIT);
+
+        DbExecutor.supply(() -> {
+            TxResult result = LEDGER.transferFromAccount(fromAccountNumber, toAccountNumber, amount, limit, inGameDay);
+            return new MoneyResult(result, LEDGER.findBalance(fromAccountNumber).orElse(BigDecimal.ZERO));
+        }).whenCompleteAsync((outcome, error) -> {
+            if (!isStillOnline(player)) return;
+            onResult.accept(error != null
+                    ? new MoneyResult(logAndConvert(error, player, "virement"), BigDecimal.ZERO)
+                    : outcome);
+        }, player.getServer());
+    }
+
+    /** Issue d'un paiement TPE : distingue "carte absente" et "entreprise introuvable" d'un refus bancaire normal. */
+    public enum TpeOutcome { OK, NOT_HOLDING_CARD, COMPANY_NOT_FOUND, REFUSED }
+
+    public record TpePaymentResult(TpeOutcome outcome, TxResult txResult) {
+        public String message() {
+            return switch (outcome) {
+                case OK -> txResult.message();
+                case NOT_HOLDING_CARD -> "Vous devez garder votre carte bancaire en main pour payer.";
+                case COMPANY_NOT_FOUND -> "Compte entreprise introuvable.";
+                case REFUSED -> switch (txResult) {
+                    case INSUFFICIENT_FUNDS -> "Paiement refuse : solde insuffisant.";
+                    case SAME_ACCOUNT -> "Vous ne pouvez pas payer votre propre compte.";
+                    default -> "Paiement refuse : " + txResult.message();
+                };
+            };
         }
+    }
+
+    /**
+     * Paiement TPE async, en un seul aller-retour base : verifie la carte en main, resout le compte de
+     * l'entreprise et effectue le paiement dans la MEME requete plutot qu'en trois appels chaines (chacun
+     * rechargerait inutilement le thread principal entre deux). Ne touche pas a l'inventaire (le montant
+     * en attente reste sur le bloc TPE, mis a jour par l'appelant apres coup).
+     */
+    public static void payAtTpe(ServerPlayer buyer, HandCards cards, String companyId, BigDecimal amount,
+                                 Consumer<TpePaymentResult> onResult) {
+        UUID uuid = buyer.getUUID();
+        long inGameDay = currentInGameDay(buyer);
+
+        DbExecutor.supply(() -> {
+            if (!ownsAnyOf(uuid, cards)) {
+                return new TpePaymentResult(TpeOutcome.NOT_HOLDING_CARD, TxResult.NO_ACCOUNT);
+            }
+            String normalized = normalizeCompanyId(companyId);
+            if (!companyExists(normalized)) {
+                return new TpePaymentResult(TpeOutcome.COMPANY_NOT_FOUND, TxResult.NO_ACCOUNT);
+            }
+            String companyAccount = getCompanyAccountNumber(normalized);
+            TxResult result = processTpePayment(uuid, companyAccount, amount, inGameDay);
+            return new TpePaymentResult(result.isOk() ? TpeOutcome.OK : TpeOutcome.REFUSED, result);
+        }).whenCompleteAsync((outcome, error) -> {
+            if (!isStillOnline(buyer)) return;
+            if (error != null) {
+                onResult.accept(new TpePaymentResult(TpeOutcome.REFUSED, logAndConvert(error, buyer, "paiement TPE")));
+                return;
+            }
+            onResult.accept(outcome);
+        }, buyer.getServer());
+    }
+
+    /** Resultat d'une verification de PIN, avec le solde du compte si elle a reussi (sinon zero). */
+    public record PinResult(PinCheck check, BigDecimal balance) {
+    }
+
+    /**
+     * Verification de PIN async, carte precise (ATM). {@code accountNumber} (deja connu de l'ATM depuis
+     * son ouverture) sert uniquement a lire le solde a afficher en cas de succes, dans la meme requete.
+     */
+    public static void checkCardPin(ServerPlayer player, String cardNumber, String accountNumber, int pin, Consumer<PinResult> onResult) {
+        DbExecutor.supply(() -> {
+            PinCheck check = checkCardPin(cardNumber, pin);
+            BigDecimal balance = check.isOk() ? LEDGER.findBalance(accountNumber).orElse(BigDecimal.ZERO) : BigDecimal.ZERO;
+            return new PinResult(check, balance);
+        }).whenCompleteAsync((outcome, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                LOGGER.error("Erreur pendant la verification du PIN de la carte {} pour {}",
+                        cardNumber, player.getName().getString(), error);
+                onResult.accept(new PinResult(PinCheck.error(), BigDecimal.ZERO));
+                return;
+            }
+            onResult.accept(outcome);
+        }, player.getServer());
+    }
+
+    /** Verification de PIN async, compte personnel (TPE acheteur), avec le solde en cas de succes. */
+    public static void checkPin(ServerPlayer player, int pin, Consumer<PinResult> onResult) {
+        UUID uuid = player.getUUID();
+        DbExecutor.supply(() -> {
+            PinCheck check = checkPin(uuid, pin);
+            BigDecimal balance = check.isOk() ? LEDGER.findPersonalBalance(getActiveProfileId(uuid)).orElse(BigDecimal.ZERO) : BigDecimal.ZERO;
+            return new PinResult(check, balance);
+        }).whenCompleteAsync((outcome, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                LOGGER.error("Erreur pendant la verification du PIN de {}", player.getName().getString(), error);
+                onResult.accept(new PinResult(PinCheck.error(), BigDecimal.ZERO));
+                return;
+            }
+            onResult.accept(outcome);
+        }, player.getServer());
+    }
+
+    /** Resolution async du compte associe a une carte (ouverture de l'ATM). */
+    public static void resolveCardAccount(ServerPlayer player, String cardNumber, Consumer<Optional<String>> onResult) {
+        DbExecutor.supply(() -> resolveCardAccount(cardNumber))
+                .whenCompleteAsync((result, error) -> {
+                    if (!isStillOnline(player)) return;
+                    if (error != null) {
+                        LOGGER.error("Resolution du compte de la carte {} impossible pour {}",
+                                cardNumber, player.getName().getString(), error);
+                        onResult.accept(Optional.empty());
+                        return;
+                    }
+                    onResult.accept(result);
+                }, player.getServer());
+    }
+
+    /**
+     * Verification async d'appartenance d'une des deux cartes en main (voir {@link #cardsInHand}), pour
+     * l'ouverture du TPE et le paiement. {@code cards} doit avoir ete capture sur le thread principal.
+     */
+    public static void ownsAnyOf(ServerPlayer player, HandCards cards, Consumer<Boolean> onResult) {
+        if (cards.isEmpty()) {
+            onResult.accept(false);
+            return;
+        }
+        UUID uuid = player.getUUID();
+        DbExecutor.supply(() -> ownsAnyOf(uuid, cards))
+                .whenCompleteAsync((result, error) -> {
+                    if (!isStillOnline(player)) return;
+                    if (error != null) {
+                        LOGGER.error("Verification de la carte impossible pour {}", player.getName().getString(), error);
+                        onResult.accept(false);
+                        return;
+                    }
+                    onResult.accept(result);
+                }, player.getServer());
+    }
+
+    /** Changement async du PIN d'une carte precise (ATM, carte deja authentifiee). */
+    public static void updateCardPinByNumber(ServerPlayer player, String cardNumber, String pin, Consumer<Boolean> onResult) {
+        DbExecutor.supply(() -> updateCardPinByNumber(cardNumber, pin))
+                .whenCompleteAsync((result, error) -> {
+                    if (!isStillOnline(player)) return;
+                    if (error != null) {
+                        LOGGER.error("Changement de PIN impossible pour la carte {} ({})", cardNumber, player.getName().getString(), error);
+                        onResult.accept(false);
+                        return;
+                    }
+                    onResult.accept(result);
+                }, player.getServer());
+    }
+
+    /** Resultat de l'initialisation du PIN personnel (ecran de premiere connexion, hors ATM). */
+    public enum InitPinResult { NOT_REQUIRED, SAVED, FAILED, ERROR }
+
+    /** Version async de l'ancien flux "definir mon PIN personnel" (hors ATM, PIN encore par defaut). */
+    public static void initPersonalPin(ServerPlayer player, String pin, Consumer<InitPinResult> onResult) {
+        UUID uuid = player.getUUID();
+        DbExecutor.supply(() -> {
+            if (!hasDefaultCardPin(uuid)) return InitPinResult.NOT_REQUIRED;
+            return updateCardPin(uuid, pin) ? InitPinResult.SAVED : InitPinResult.FAILED;
+        }).whenCompleteAsync((result, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                LOGGER.error("Initialisation du PIN impossible pour {}", player.getName().getString(), error);
+                onResult.accept(InitPinResult.ERROR);
+                return;
+            }
+            onResult.accept(result);
+        }, player.getServer());
+    }
+
+    private static TxResult logAndConvert(Throwable error, Player player, String action) {
+        LOGGER.error("Erreur pendant un {} pour {}", action, player.getName().getString(), error);
+        return TxResult.SERVICE_UNAVAILABLE;
+    }
+
+    /**
+     * Vrai si le joueur est toujours connecte avec cette meme instance. A verifier avant de toucher a son
+     * inventaire ou de lui envoyer un paquet depuis une continuation async : l'argent, lui, est de toute
+     * facon deja correctement a jour en base (ou refuse), qu'on touche au joueur ensuite ou non.
+     */
+    private static boolean isStillOnline(ServerPlayer player) {
+        MinecraftServer server = player.getServer();
+        return server != null && server.getPlayerList().getPlayer(player.getUUID()) == player;
+    }
+
+    /** Solde d'un compte quelconque pour l'affichage : 0 si introuvable ou la base indisponible. */
+    public static BigDecimal accountBalanceOrZero(String accountNumber) {
+        try {
+            return LEDGER.findBalance(accountNumber).orElse(BigDecimal.ZERO);
+        } catch (BankException e) {
+            LOGGER.error("Lecture du solde impossible pour le compte {}", accountNumber, e);
+            return BigDecimal.ZERO;
+        }
+    }
+
+    /**
+     * Cree le compte bancaire d'une entreprise, rattache administrativement a un joueur (le "proprietaire").
+     * Le lien salarie/entreprise ne vit pas ici : il faut creer separement un groupe LuckPerms du meme nom
+     * (insensible a la casse) que {@code companyId} et y ajouter les salaries (voir {@link JobService}).
+     */
+    public static String createCompanyAccount(String companyId, Player owner) {
+        int profileId = requireProfileId(owner);
+        String normalized = normalizeCompanyId(companyId);
+        return LEDGER.createCompanyAccount(normalized, profileId, BigDecimal.ZERO)
+                .orElseThrow(() -> new IllegalStateException("Une entreprise existe deja avec cet identifiant : " + normalized));
+    }
+
+    /**
+     * Emet une nouvelle carte pour le compte d'une entreprise (PIN par defaut) et la remet au joueur cible.
+     * Plusieurs cartes peuvent coexister pour la meme entreprise (patron, gerant...), chacune avec son PIN.
+     */
+    public static String issueCompanyCard(String companyId, Player recipient) {
+        String accountNumber = getCompanyAccountNumber(companyId);
+        String cardNumber = LEDGER.issueCard(accountNumber, PinHasher.hash(defaultPin()))
+                .orElseThrow(() -> new BankException("Compte entreprise introuvable : " + accountNumber));
+        giveRawCardItem(recipient, cardNumber);
+        return cardNumber;
     }
 
     // -------------------------------------------------------------------------
@@ -470,14 +786,24 @@ public final class BankManager {
         return stack;
     }
 
+    /** Redonne une carte PERSONNELLE : refuse si elle n'appartient pas au profil actif du joueur. */
     public static boolean giveCardItemByNumber(Player player, String cardNumber) {
         if (!playerOwnsCard(player, cardNumber)) return false;
+        giveRawCardItem(player, cardNumber);
+        return true;
+    }
+
+    /**
+     * Remet physiquement une carte au joueur, sans verifier l'appartenance. Une carte d'entreprise n'est
+     * pas liee a un seul profil (voir {@link #issueCompanyCard}) : c'est la possession de l'objet et le
+     * PIN, pas une verification de propriete, qui protegent son usage.
+     */
+    private static void giveRawCardItem(Player player, String cardNumber) {
         ItemStack cardStack = createCardItem(cardNumber);
         if (!player.getInventory().add(cardStack)) {
             player.drop(cardStack, false);
         }
         markCardItemGiven(cardNumber, player.getUUID().toString());
-        return true;
     }
 
     public static boolean giveWalletItem(Player player) {

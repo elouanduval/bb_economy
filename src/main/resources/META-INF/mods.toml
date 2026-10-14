@@ -61,3 +61,12 @@ mandatory = true
 versionRange = "${minecraft_version_range}"
 ordering = "NONE"
 side = "BOTH"
+
+# LuckPerms est optionnel : sans lui, la banque personnelle marche normalement, seule la gestion des
+# entreprises (TPE, appartenance a un groupe = salarie) est desactivee. Voir org.bb.bb_economy.perms.JobService.
+[[dependencies."${mod_id}"]]
+modId = "luckperms"
+mandatory = false
+versionRange = "[5,)"
+ordering = "AFTER"
+side = "SERVER"

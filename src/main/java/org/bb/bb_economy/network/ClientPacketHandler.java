@@ -26,6 +26,8 @@ public class ClientPacketHandler {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         if (mc.screen instanceof org.bb.bb_economy.gui.PinSetupScreen screen) {
             screen.onPinSaved(packet.success, packet.message);
+        } else if (mc.screen instanceof org.bb.bb_economy.gui.AtmScreen screen) {
+            screen.onPinChangeResponse(packet.success, packet.message);
         }
     }
 

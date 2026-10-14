@@ -16,15 +16,21 @@ import org.bb.bb_economy.init.ModMenus;
 public class AtmScreenHandler extends AbstractContainerMenu {
 
     private final BlockPos pos;
+    // Resolus une seule fois, cote serveur, a partir de la carte tenue en main a l'ouverture de l'ATM.
+    // L'instance cree cote client (constructeur FriendlyByteBuf) n'en a pas besoin : rien ne les y lit.
+    private final String cardNumber;
+    private final String accountNumber;
     private boolean pinValidated;
 
-    public AtmScreenHandler(int windowId, Inventory playerInventory, BlockPos pos) {
+    public AtmScreenHandler(int windowId, Inventory playerInventory, BlockPos pos, String cardNumber, String accountNumber) {
         super(ModMenus.ATM_MENU.get(), windowId);
         this.pos = pos;
+        this.cardNumber = cardNumber;
+        this.accountNumber = accountNumber;
     }
 
     public AtmScreenHandler(int windowId, Inventory inv, FriendlyByteBuf buf) {
-        this(windowId, inv, buf.readBlockPos());
+        this(windowId, inv, buf.readBlockPos(), "", "");
     }
 
     @Override
@@ -38,6 +44,14 @@ public class AtmScreenHandler extends AbstractContainerMenu {
                 && player.distanceToSqr(pos.getX() + 0.5D, pos.getY() + 0.5D, pos.getZ() + 0.5D) <= 64.0D;
     }
 
+    public String getCardNumber() {
+        return cardNumber;
+    }
+
+    public String getAccountNumber() {
+        return accountNumber;
+    }
+
     public boolean isPinValidated() {
         return pinValidated;
     }
@@ -48,9 +62,13 @@ public class AtmScreenHandler extends AbstractContainerMenu {
 
     public static class Provider implements MenuProvider {
         private final BlockPos pos;
+        private final String cardNumber;
+        private final String accountNumber;
 
-        public Provider(BlockPos pos) {
+        public Provider(BlockPos pos, String cardNumber, String accountNumber) {
             this.pos = pos;
+            this.cardNumber = cardNumber;
+            this.accountNumber = accountNumber;
         }
 
         @Override
@@ -60,15 +78,16 @@ public class AtmScreenHandler extends AbstractContainerMenu {
 
         @Override
         public AbstractContainerMenu createMenu(int windowId, Inventory playerInventory, Player player) {
-            return new AtmScreenHandler(windowId, playerInventory, pos);
+            return new AtmScreenHandler(windowId, playerInventory, pos, cardNumber, accountNumber);
         }
     }
 
-    public static void open(Player player, BlockPos pos) {
+    /** cardNumber/accountNumber sont resolus par l'appelant a partir de la carte tenue en main. */
+    public static void open(Player player, BlockPos pos, String cardNumber, String accountNumber) {
         if (!(player instanceof ServerPlayer serverPlayer)) {
             return;
         }
 
-        NetworkHooks.openScreen(serverPlayer, new Provider(pos), buf -> buf.writeBlockPos(pos));
+        NetworkHooks.openScreen(serverPlayer, new Provider(pos, cardNumber, accountNumber), buf -> buf.writeBlockPos(pos));
     }
 }

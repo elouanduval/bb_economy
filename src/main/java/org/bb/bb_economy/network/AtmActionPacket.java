@@ -58,8 +58,9 @@ public class AtmActionPacket {
             try {
                 process(player, packet);
             } catch (RuntimeException e) {
+                // Erreur synchrone (validation avant meme de partir en base) : le seul cas restant ici.
                 LOGGER.error("Erreur pendant une operation ATM de {}", player.getName().getString(), e);
-                sendResponse(player, false, "Service bancaire indisponible. Reessayez plus tard.");
+                sendResponse(player, null, false, "Service bancaire indisponible. Reessayez plus tard.");
             }
         });
         ctx.get().setPacketHandled(true);
@@ -67,51 +68,49 @@ public class AtmActionPacket {
 
     private static void process(ServerPlayer player, AtmActionPacket packet) {
         if (!(player.containerMenu instanceof AtmScreenHandler atmMenu) || !atmMenu.stillValid(player)) {
-            sendResponse(player, false, "Session ATM invalide.");
+            sendResponse(player, null, false, "Session ATM invalide.");
             return;
         }
         if (!atmMenu.isPinValidated()) {
-            sendResponse(player, false, "PIN ATM non valide.");
+            sendResponse(player, atmMenu.getAccountNumber(), false, "PIN ATM non valide.");
             return;
         }
 
         BigDecimal amount = Money.parsePositive(packet.amount).orElse(null);
         if (amount == null) {
-            sendResponse(player, false, "Montant invalide.");
+            sendResponse(player, atmMenu.getAccountNumber(), false, "Montant invalide.");
             return;
         }
 
-        TxResult result;
+        String accountNumber = atmMenu.getAccountNumber();
         switch (packet.actionType) {
             case DEPOSIT -> {
                 if (!Money.isWhole(amount)) {
-                    sendResponse(player, false, "Le depot doit etre un montant entier.");
+                    sendResponse(player, accountNumber, false, "Le depot doit etre un montant entier.");
                     return;
                 }
-                result = BankManager.deposit(player, amount);
+                BankManager.depositToAccount(player, accountNumber, amount, outcome ->
+                        sendResponse(player, outcome.result(), outcome.balance(), describe(ActionType.DEPOSIT, outcome.result())));
             }
             case WITHDRAW -> {
                 if (!Money.isWhole(amount)) {
-                    sendResponse(player, false, "Le retrait doit etre un montant entier.");
+                    sendResponse(player, accountNumber, false, "Le retrait doit etre un montant entier.");
                     return;
                 }
-                result = BankManager.withdraw(player, amount);
+                BankManager.withdrawFromAccount(player, accountNumber, amount, outcome ->
+                        sendResponse(player, outcome.result(), outcome.balance(), describe(ActionType.WITHDRAW, outcome.result())));
             }
             case TRANSFER -> {
                 String targetAccount = normalizeAccountNumber(packet.targetAccount);
                 if (targetAccount == null) {
-                    sendResponse(player, false, "Numero de compte invalide.");
+                    sendResponse(player, accountNumber, false, "Numero de compte invalide.");
                     return;
                 }
-                result = BankManager.transfer(player, targetAccount, amount);
+                BankManager.transferFromAccount(player, accountNumber, targetAccount, amount, outcome ->
+                        sendResponse(player, outcome.result(), outcome.balance(), describe(ActionType.TRANSFER, outcome.result())));
             }
-            default -> {
-                sendResponse(player, false, "Operation inconnue.");
-                return;
-            }
+            default -> sendResponse(player, accountNumber, false, "Operation inconnue.");
         }
-
-        sendResponse(player, result.isOk(), describe(packet.actionType, result));
     }
 
     private static String describe(ActionType action, TxResult result) {
@@ -132,9 +131,24 @@ public class AtmActionPacket {
         return result.message();
     }
 
-    private static void sendResponse(ServerPlayer player, boolean success, String message) {
+    /** Variante utilisee quand le resultat (et donc le solde) sont deja connus. */
+    private static void sendResponse(ServerPlayer player, TxResult result, BigDecimal balance, String message) {
         ModNetworking.CHANNEL.sendTo(
-                new AtmActionResponsePacket(success, BankManager.balanceOrZero(player).doubleValue(), message),
+                new AtmActionResponsePacket(result.isOk(), balance.doubleValue(), message),
+                player.connection.connection,
+                net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
+        );
+    }
+
+    /**
+     * Variante de rejet immediat (avant tout appel base) : accountNumber peut etre null si la session ATM
+     * elle-meme est invalide (aucun compte a afficher). Seul cas ou une lecture de solde reste synchrone,
+     * sur un chemin d'echec instantane, pas la boucle chaude.
+     */
+    private static void sendResponse(ServerPlayer player, String accountNumber, boolean success, String message) {
+        double balance = accountNumber != null ? BankManager.accountBalanceOrZero(accountNumber).doubleValue() : 0;
+        ModNetworking.CHANNEL.sendTo(
+                new AtmActionResponsePacket(success, balance, message),
                 player.connection.connection,
                 net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
         );

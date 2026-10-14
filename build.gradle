@@ -53,6 +53,9 @@ repositories {
 }
 dependencies {
     minecraft "net.minecraftforge:forge:${minecraft_version}-${forge_version}"
+    // Dependance optionnelle : presente uniquement a la compilation, LuckPerms fournit ses propres classes
+    // au runtime quand le mod est installe sur le serveur (voir mods.toml, dependance non obligatoire).
+    compileOnly 'net.luckperms:api:5.5'
     minecraftLibrary 'com.zaxxer:HikariCP:5.1.0'
     minecraftLibrary 'org.mariadb.jdbc:mariadb-java-client:3.3.3'
     bundledLibs ('com.zaxxer:HikariCP:5.1.0') {

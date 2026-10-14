@@ -18,6 +18,7 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.block.state.StateDefinition;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.phys.BlockHitResult;
 import org.bb.bb_economy.blocks.entity.TpeBlockEntity;
 import org.bb.bb_economy.database.BankManager;
@@ -80,12 +81,21 @@ public class TpeBlock extends BaseEntityBlock {
             }
 
             if (!BankManager.playerWorksForCompany(player, tpeBlockEntity.getCompanyId())) {
-                if (!BankManager.hasOwnedCardInHand(player)) {
+                if (!(player instanceof ServerPlayer serverPlayer)) {
+                    return InteractionResult.SUCCESS;
+                }
+                BankManager.HandCards cards = BankManager.cardsInHand(player);
+                if (cards.isEmpty()) {
                     player.displayClientMessage(Component.literal("Vous devez cliquer avec votre carte bancaire en main pour utiliser ce TPE."), true);
                     return InteractionResult.SUCCESS;
                 }
-
-                TpeScreenHandler.open(player, pos, tpeBlockEntity, TpeScreenHandler.AccessMode.BUYER);
+                BankManager.ownsAnyOf(serverPlayer, cards, owned -> {
+                    if (!owned) {
+                        player.displayClientMessage(Component.literal("Vous devez cliquer avec votre carte bancaire en main pour utiliser ce TPE."), true);
+                        return;
+                    }
+                    TpeScreenHandler.open(player, pos, tpeBlockEntity, TpeScreenHandler.AccessMode.BUYER);
+                });
                 return InteractionResult.SUCCESS;
             }
 

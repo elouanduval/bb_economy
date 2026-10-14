@@ -1,0 +1,15 @@
+# Gradle / build
+.gradle/
+build/
+out/
+
+# IDE (le .idea/.gitignore deja suivi reste en place)
+.idea/*
+!.idea/.gitignore
+
+# Fichiers generes a l'execution (monde, logs, crashs) ; run/config reste suivi
+logs/
+run/saves/
+run/logs/
+run/crash-reports/
+run-data/

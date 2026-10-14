@@ -164,26 +164,10 @@ public class DatabaseManager {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """);
 
-            // owner est maintenant un INT referençant profiles.id
-            stmt.execute("""
-                CREATE TABLE IF NOT EXISTS bb_jobs (
-                    job_id          VARCHAR(20)   NOT NULL,
-                    job_name        VARCHAR(50)   NOT NULL,
-                    job_rank        INT           NOT NULL DEFAULT 2,
-                    job_salary      DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-                    job_salary_time INT           NOT NULL DEFAULT 0,
-                    owner           INT           NOT NULL,
-                    company_id      VARCHAR(20)   NOT NULL,
-                    PRIMARY KEY (job_id),
-                    INDEX idx_job_owner   (owner),
-                    INDEX idx_job_company (company_id),
-                    INDEX idx_salary_time (job_salary_time),
-                    CONSTRAINT fk_job_profile FOREIGN KEY (owner)
-                        REFERENCES profiles (id) ON DELETE CASCADE,
-                    CONSTRAINT fk_job_company FOREIGN KEY (company_id)
-                        REFERENCES bb_companies (company_id) ON DELETE CASCADE
-                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
-            """);
+            // Le lien salarie/entreprise et les salaires ne sont plus geres par bb_economy : une entreprise est
+            // un groupe LuckPerms, un salarie en est membre, le patron paie a la main (voir org.bb.bb_economy.perms.JobService).
+            // Sur une base creee par une ancienne version, la table bb_jobs existante n'est pas supprimee automatiquement :
+            // elle est juste ignoree. Elle peut etre supprimee a la main quand vous n'en avez plus besoin.
 
             migrateExistingTables(stmt);
 
