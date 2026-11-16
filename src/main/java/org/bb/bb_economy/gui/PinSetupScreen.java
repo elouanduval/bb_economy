@@ -1,5 +1,6 @@
 package org.bb.bb_economy.gui;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -15,12 +16,12 @@ public class PinSetupScreen extends Screen {
 
     private EditBox pinField;
     private EditBox confirmPinField;
-    private Component message = Component.literal("Choisissez un PIN a 4 chiffres");
+    private Component message = Component.translatable(Msg.PREFIX + "gui.choose_pin");
     private int messageColor = 0xFFFFFF;
     private boolean submitting;
 
     public PinSetupScreen() {
-        super(Component.literal("Configuration du PIN"));
+        super(Component.translatable(Msg.PREFIX + "gui.pin_setup_title"));
     }
 
     @Override
@@ -30,17 +31,17 @@ public class PinSetupScreen extends Screen {
         int cy = this.height / 2 - 34;
         int width = 132;
 
-        pinField = new EditBox(this.font, cx - width / 2, cy, width, 18, Component.literal("PIN"));
-        pinField.setHint(Component.literal("Nouveau PIN"));
+        pinField = new EditBox(this.font, cx - width / 2, cy, width, 18, Component.translatable(Msg.PREFIX + "gui.pin"));
+        pinField.setHint(Component.translatable(Msg.PREFIX + "gui.new_pin"));
         pinField.setFilter(value -> value.matches("\\d{0,4}"));
         this.addRenderableWidget(pinField);
 
-        confirmPinField = new EditBox(this.font, cx - width / 2, cy + 26, width, 18, Component.literal("Confirmation"));
-        confirmPinField.setHint(Component.literal("Confirmation"));
+        confirmPinField = new EditBox(this.font, cx - width / 2, cy + 26, width, 18, Component.translatable(Msg.PREFIX + "gui.confirmation"));
+        confirmPinField.setHint(Component.translatable(Msg.PREFIX + "gui.confirmation"));
         confirmPinField.setFilter(value -> value.matches("\\d{0,4}"));
         this.addRenderableWidget(confirmPinField);
 
-        this.addRenderableWidget(Button.builder(Component.literal("Valider"), btn -> submit())
+        this.addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.confirm"), btn -> submit())
                 .pos(cx - width / 2, cy + 58).size(width, 20).build());
 
         setInitialFocus(pinField);
@@ -53,16 +54,16 @@ public class PinSetupScreen extends Screen {
         String confirmation = confirmPinField.getValue().trim();
 
         if (!pin.matches("\\d{4}")) {
-            setMessage("Le PIN doit contenir 4 chiffres", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "pin.four_digits"), 0xFF4444);
             return;
         }
         if (!pin.equals(confirmation)) {
-            setMessage("Les deux PIN ne correspondent pas", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.pin_mismatch"), 0xFF4444);
             return;
         }
 
         submitting = true;
-        setMessage("Enregistrement...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.saving"), 0xAAAAAA);
         ModNetworking.CHANNEL.sendToServer(new SetCardPinPacket(pin));
     }
 
@@ -75,7 +76,7 @@ public class PinSetupScreen extends Screen {
     }
 
     private void setMessage(String text, int color) {
-        this.message = Component.literal(text);
+        this.message = Msg.component(text);
         this.messageColor = color;
     }
 
@@ -96,7 +97,7 @@ public class PinSetupScreen extends Screen {
         g.fill(x, y, x + 1, y + h, 0xFF505050);
         g.fill(x + w - 1, y, x + w, y + h, 0xFF505050);
 
-        String title = "Nouveau PIN";
+        String title = Msg.tr("gui.new_pin");
         g.drawString(this.font, title, cx - this.font.width(title) / 2, y + 12, 0xEAEAEA, false);
 
         super.render(g, mouseX, mouseY, partialTick);

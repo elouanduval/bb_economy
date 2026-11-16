@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import com.mojang.logging.LogUtils;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
@@ -48,7 +49,7 @@ public class TpeSetAmountPacket {
                 process(player, packet);
             } catch (RuntimeException e) {
                 LOGGER.error("Erreur pendant la definition d'un montant TPE par {}", player.getName().getString(), e);
-                sendResponse(player, false, "Service bancaire indisponible. Reessayez plus tard.", "0");
+                sendResponse(player, false, Msg.of(Msg.PREFIX + "tx.service_unavailable"), "0");
             }
         });
         ctx.get().setPacketHandled(true);
@@ -59,13 +60,13 @@ public class TpeSetAmountPacket {
                 || tpeMenu.getAccessMode() != TpeScreenHandler.AccessMode.SELLER
                 || !tpeMenu.getPos().equals(packet.pos)
                 || !tpeMenu.stillValid(player)) {
-            sendResponse(player, false, "Session TPE vendeur invalide.", "0");
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.invalid_seller_session"), "0");
             return;
         }
 
         BlockEntity blockEntity = player.level().getBlockEntity(packet.pos);
         if (!(blockEntity instanceof TpeBlockEntity tpe)) {
-            sendResponse(player, false, "TPE introuvable.", "0");
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.not_found"), "0");
             return;
         }
 
@@ -73,14 +74,14 @@ public class TpeSetAmountPacket {
 
         OptionalInt companyId = BankManager.parseCompanyId(tpe.getCompanyId());
         if (companyId.isEmpty()) {
-            sendResponse(player, false, "Ce TPE n'est lie a aucune entreprise.", pendingText);
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.no_company"), pendingText);
             return;
         }
 
         BigDecimal amount = Money.parsePositive(packet.amount).orElse(null);
         if (amount == null) {
             sendResponse(player, false,
-                    "Montant invalide (superieur a 0, 2 decimales maximum, jusqu'a " + Money.MAX_AMOUNT.toPlainString() + ").",
+                    Msg.of(Msg.PREFIX + "tpe.invalid_amount_max", Money.MAX_AMOUNT.toPlainString()),
                     pendingText);
             return;
         }
@@ -89,19 +90,19 @@ public class TpeSetAmountPacket {
         // session et le bloc sont toujours les memes avant de modifier le montant.
         BankManager.worksForCompany(player, companyId.getAsInt(), works -> {
             if (!works) {
-                sendResponse(player, false, "Vous n'etes pas autorise a utiliser ce TPE.", pendingText);
+                sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.not_authorized"), pendingText);
                 return;
             }
             if (player.containerMenu != tpeMenu || !tpeMenu.stillValid(player)
                     || player.level().getBlockEntity(packet.pos) != tpe) {
-                sendResponse(player, false, "Session TPE vendeur invalide.", "0");
+                sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.invalid_seller_session"), "0");
                 return;
             }
             tpe.setPendingAmount(amount);
             player.level().sendBlockUpdated(packet.pos, tpe.getBlockState(), tpe.getBlockState(), 3);
 
             String shown = amount.stripTrailingZeros().toPlainString();
-            sendResponse(player, true, "Montant enregistre. Le client pourra payer " + shown + " EUR.", amount.toPlainString());
+            sendResponse(player, true, Msg.of(Msg.PREFIX + "tpe.amount_saved", shown + " " + Money.CURRENCY), amount.toPlainString());
         });
     }
 

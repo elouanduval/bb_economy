@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
@@ -48,11 +49,11 @@ public class AtmSelectAccountPacket {
 
     private static void process(ServerPlayer player, AtmSelectAccountPacket packet) {
         if (!(player.containerMenu instanceof AtmScreenHandler atmMenu) || !atmMenu.stillValid(player)) {
-            sendResponse(player, false, BigDecimal.ZERO, "Session ATM invalide.");
+            sendResponse(player, false, BigDecimal.ZERO, Msg.of(Msg.PREFIX + "atm.invalid_session"));
             return;
         }
         if (!atmMenu.isPinValidated()) {
-            sendResponse(player, false, BigDecimal.ZERO, "PIN ATM non valide.");
+            sendResponse(player, false, BigDecimal.ZERO, Msg.of(Msg.PREFIX + "atm.pin_not_valid"));
             return;
         }
 
@@ -63,7 +64,7 @@ public class AtmSelectAccountPacket {
                     return;
                 }
                 atmMenu.useAccount(account);
-                sendResponse(player, true, balance, "Compte personnel.");
+                sendResponse(player, true, balance, Msg.of(Msg.PREFIX + "atm.personal_account"));
             });
             return;
         }
@@ -71,7 +72,7 @@ public class AtmSelectAccountPacket {
         // Une entreprise qui n'etait pas dans la liste proposee a l'ouverture est refusee sans meme aller en base.
         CompanyChoice company = atmMenu.findCompany(packet.companyId).orElse(null);
         if (company == null) {
-            sendResponse(player, false, BigDecimal.ZERO, "Compte entreprise non autorise.");
+            sendResponse(player, false, BigDecimal.ZERO, Msg.of(Msg.PREFIX + "atm.company_not_allowed"));
             return;
         }
         BankManager.selectCompanyAccount(player, company.id(), selection -> {
@@ -79,11 +80,11 @@ public class AtmSelectAccountPacket {
                 return;
             }
             if (selection.isEmpty()) {
-                sendResponse(player, false, BigDecimal.ZERO, "Compte entreprise non autorise.");
+                sendResponse(player, false, BigDecimal.ZERO, Msg.of(Msg.PREFIX + "atm.company_not_allowed"));
                 return;
             }
             atmMenu.useAccount(selection.get().accountNumber());
-            sendResponse(player, true, selection.get().balance(), "Compte de " + company.name() + ".");
+            sendResponse(player, true, selection.get().balance(), Msg.of(Msg.PREFIX + "atm.company_account", company.name()));
         });
     }
 

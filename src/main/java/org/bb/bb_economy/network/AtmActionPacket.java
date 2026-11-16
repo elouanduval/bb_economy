@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import com.mojang.logging.LogUtils;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -60,7 +61,7 @@ public class AtmActionPacket {
             } catch (RuntimeException e) {
                 // Erreur synchrone (validation avant meme de partir en base) : le seul cas restant ici.
                 LOGGER.error("Erreur pendant une operation ATM de {}", player.getName().getString(), e);
-                sendResponse(player, null, false, "Service bancaire indisponible. Reessayez plus tard.");
+                sendResponse(player, null, false, Msg.of(Msg.PREFIX + "tx.service_unavailable"));
             }
         });
         ctx.get().setPacketHandled(true);
@@ -68,17 +69,17 @@ public class AtmActionPacket {
 
     private static void process(ServerPlayer player, AtmActionPacket packet) {
         if (!(player.containerMenu instanceof AtmScreenHandler atmMenu) || !atmMenu.stillValid(player)) {
-            sendResponse(player, null, false, "Session ATM invalide.");
+            sendResponse(player, null, false, Msg.of(Msg.PREFIX + "atm.invalid_session"));
             return;
         }
         if (!atmMenu.isPinValidated()) {
-            sendResponse(player, atmMenu.getAccountNumber(), false, "PIN ATM non valide.");
+            sendResponse(player, atmMenu.getAccountNumber(), false, Msg.of(Msg.PREFIX + "atm.pin_not_valid"));
             return;
         }
 
         BigDecimal amount = Money.parsePositive(packet.amount).orElse(null);
         if (amount == null) {
-            sendResponse(player, atmMenu.getAccountNumber(), false, "Montant invalide.");
+            sendResponse(player, atmMenu.getAccountNumber(), false, Msg.of(Msg.PREFIX + "tx.invalid_amount"));
             return;
         }
 
@@ -86,7 +87,7 @@ public class AtmActionPacket {
         switch (packet.actionType) {
             case DEPOSIT -> {
                 if (!Money.isWhole(amount)) {
-                    sendResponse(player, accountNumber, false, "Le depot doit etre un montant entier.");
+                    sendResponse(player, accountNumber, false, Msg.of(Msg.PREFIX + "atm.deposit_whole"));
                     return;
                 }
                 BankManager.depositToAccount(player, accountNumber, amount, outcome ->
@@ -94,7 +95,7 @@ public class AtmActionPacket {
             }
             case WITHDRAW -> {
                 if (!Money.isWhole(amount)) {
-                    sendResponse(player, accountNumber, false, "Le retrait doit etre un montant entier.");
+                    sendResponse(player, accountNumber, false, Msg.of(Msg.PREFIX + "atm.withdraw_whole"));
                     return;
                 }
                 BankManager.withdrawFromAccount(player, accountNumber, amount, outcome ->
@@ -103,29 +104,29 @@ public class AtmActionPacket {
             case TRANSFER -> {
                 String targetAccount = normalizeAccountNumber(packet.targetAccount);
                 if (targetAccount == null) {
-                    sendResponse(player, accountNumber, false, "Numero de compte invalide.");
+                    sendResponse(player, accountNumber, false, Msg.of(Msg.PREFIX + "atm.invalid_account_number"));
                     return;
                 }
                 BankManager.transferFromAccount(player, accountNumber, targetAccount, amount, outcome ->
                         sendResponse(player, outcome.result(), outcome.balance(), describe(ActionType.TRANSFER, outcome.result())));
             }
-            default -> sendResponse(player, accountNumber, false, "Operation inconnue.");
+            default -> sendResponse(player, accountNumber, false, Msg.of(Msg.PREFIX + "atm.unknown_operation"));
         }
     }
 
     private static String describe(ActionType action, TxResult result) {
         if (result == TxResult.OK) {
             return switch (action) {
-                case DEPOSIT -> "Depot effectue.";
-                case WITHDRAW -> "Retrait effectue.";
-                case TRANSFER -> "Virement effectue.";
+                case DEPOSIT -> Msg.of(Msg.PREFIX + "atm.deposit_done");
+                case WITHDRAW -> Msg.of(Msg.PREFIX + "atm.withdraw_done");
+                case TRANSFER -> Msg.of(Msg.PREFIX + "atm.transfer_done");
             };
         }
         if (result == TxResult.LIMIT_REACHED) {
             return switch (action) {
-                case DEPOSIT -> "Limite de depot journaliere atteinte.";
-                case WITHDRAW -> "Limite de retrait journaliere atteinte.";
-                case TRANSFER -> "Limite de virement journaliere atteinte.";
+                case DEPOSIT -> Msg.of(Msg.PREFIX + "atm.deposit_limit");
+                case WITHDRAW -> Msg.of(Msg.PREFIX + "atm.withdraw_limit");
+                case TRANSFER -> Msg.of(Msg.PREFIX + "atm.transfer_limit");
             };
         }
         return result.message();

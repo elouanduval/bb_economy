@@ -1,5 +1,6 @@
 package org.bb.bb_economy.item;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.Item;
@@ -22,7 +23,7 @@ public class CardItem extends Item {
         super.appendHoverText(stack, level, tooltip, flag);
         String cardNumber = getCardNumber(stack);
         if (!cardNumber.isBlank()) {
-            tooltip.add(Component.literal("Numero : " + cardNumber).withStyle(ChatFormatting.GRAY));
+            tooltip.add(Component.translatable(Msg.PREFIX + "item.card_number", cardNumber).withStyle(ChatFormatting.GRAY));
         }
     }
 

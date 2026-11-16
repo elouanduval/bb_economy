@@ -6,6 +6,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.Config;
+import org.bb.bb_economy.Msg;
 import org.bb.bb_economy.init.ModItems;
 import org.bb.bb_economy.item.CardItem;
 import org.slf4j.Logger;
@@ -33,7 +34,7 @@ import java.util.function.Consumer;
 public final class BankManager {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final BankLedger LEDGER = new BankLedger(DatabaseManager::getConnection);
+    static final BankLedger LEDGER = new BankLedger(DatabaseManager::getConnection);
     private static final PinAttemptTracker PIN_ATTEMPTS = new PinAttemptTracker();
 
     private BankManager() {
@@ -50,12 +51,12 @@ public final class BankManager {
 
         public String message() {
             return switch (status) {
-                case OK -> "PIN valide.";
+                case OK -> Msg.of(Msg.PREFIX + "pin.valid");
                 case WRONG -> attemptsLeft > 0
-                        ? "PIN incorrect. Essais restants : " + attemptsLeft + "."
-                        : "PIN incorrect. Compte verrouille pendant " + formatDuration(lockSeconds) + ".";
-                case LOCKED -> "Trop d'essais. Reessayez dans " + formatDuration(lockSeconds) + ".";
-                case NO_CARD -> "Aucune carte bancaire disponible.";
+                        ? Msg.of(Msg.PREFIX + "pin.wrong", attemptsLeft)
+                        : Msg.of(Msg.PREFIX + "pin.wrong_locked", formatDuration(lockSeconds));
+                case LOCKED -> Msg.of(Msg.PREFIX + "pin.locked", formatDuration(lockSeconds));
+                case NO_CARD -> Msg.of(Msg.PREFIX + "pin.no_card");
                 case ERROR -> TxResult.SERVICE_UNAVAILABLE.message();
             };
         }
@@ -676,12 +677,12 @@ public final class BankManager {
         public String message() {
             return switch (outcome) {
                 case OK -> txResult.message();
-                case NOT_HOLDING_CARD -> "Vous devez garder votre carte bancaire en main pour payer.";
-                case COMPANY_NOT_FOUND -> "Compte entreprise introuvable.";
+                case NOT_HOLDING_CARD -> Msg.of(Msg.PREFIX + "tpe.keep_card");
+                case COMPANY_NOT_FOUND -> Msg.of(Msg.PREFIX + "tpe.company_account_missing");
                 case REFUSED -> switch (txResult) {
-                    case INSUFFICIENT_FUNDS -> "Paiement refuse : solde insuffisant.";
-                    case SAME_ACCOUNT -> "Vous ne pouvez pas payer votre propre compte.";
-                    default -> "Paiement refuse : " + txResult.message();
+                    case INSUFFICIENT_FUNDS -> Msg.of(Msg.PREFIX + "tpe.refused_funds");
+                    case SAME_ACCOUNT -> Msg.of(Msg.PREFIX + "tpe.own_account");
+                    default -> Msg.of(Msg.PREFIX + "tpe.refused", Msg.translated(txResult.message()));
                 };
             };
         }
@@ -930,7 +931,7 @@ public final class BankManager {
         }, player.getServer());
     }
 
-    private static TxResult logAndConvert(Throwable error, Player player, String action) {
+    static TxResult logAndConvert(Throwable error, Player player, String action) {
         LOGGER.error("Erreur pendant un {} pour {}", action, player.getName().getString(), error);
         return TxResult.SERVICE_UNAVAILABLE;
     }
@@ -940,7 +941,7 @@ public final class BankManager {
      * inventaire ou de lui envoyer un paquet depuis une continuation async : l'argent, lui, est de toute
      * facon deja correctement a jour en base (ou refuse), qu'on touche au joueur ensuite ou non.
      */
-    private static boolean isStillOnline(ServerPlayer player) {
+    static boolean isStillOnline(ServerPlayer player) {
         MinecraftServer server = player.getServer();
         return server != null && server.getPlayerList().getPlayer(player.getUUID()) == player;
     }
@@ -1012,7 +1013,7 @@ public final class BankManager {
         }
     }
 
-    private static int countBills(Player player) {
+    static int countBills(Player player) {
         int total = 0;
         for (ItemStack stack : player.getInventory().items) {
             if (stack.getItem() == ModItems.MONEY.get()) total += stack.getCount();
@@ -1020,7 +1021,7 @@ public final class BankManager {
         return total;
     }
 
-    private static void removeBills(Player player, int amount) {
+    static void removeBills(Player player, int amount) {
         int remaining = amount;
         for (ItemStack stack : player.getInventory().items) {
             if (remaining <= 0) break;
@@ -1032,7 +1033,7 @@ public final class BankManager {
         }
     }
 
-    private static void addMoneyStacks(Player player, int amount) {
+    static void addMoneyStacks(Player player, int amount) {
         int remaining = amount;
         int maxStackSize = ModItems.MONEY.get().getDefaultInstance().getMaxStackSize();
         while (remaining > 0) {
@@ -1045,7 +1046,7 @@ public final class BankManager {
         }
     }
 
-    private static void syncInventory(Player player) {
+    static void syncInventory(Player player) {
         player.getInventory().setChanged();
         if (player instanceof ServerPlayer serverPlayer) {
             serverPlayer.containerMenu.broadcastChanges();
@@ -1075,7 +1076,7 @@ public final class BankManager {
     }
 
     /** Jour in-game de l'overworld : identique quelle que soit la dimension ou se trouve le joueur. */
-    private static long currentInGameDay(Player player) {
+    static long currentInGameDay(Player player) {
         MinecraftServer server = player.getServer();
         long dayTime = server != null ? server.overworld().getDayTime() : player.level().getDayTime();
         return dayTime / 24000L;

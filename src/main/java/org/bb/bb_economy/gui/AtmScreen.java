@@ -1,5 +1,6 @@
 package org.bb.bb_economy.gui;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -8,6 +9,7 @@ import net.minecraft.client.gui.screens.inventory.MenuAccess;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
+import org.bb.bb_economy.database.Money;
 import org.bb.bb_economy.database.CompanyChoice;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.network.AtmActionPacket;
@@ -21,26 +23,35 @@ import java.util.List;
 
 public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
 
-    private static final String PIN_HINT = "Entrez votre PIN";
+    private static String pinHint() {
+        return tr("gui.enter_pin");
+    }
+
+    /** Texte traduit dans la langue du joueur (les cles sont dans assets/bb_economy/lang). */
+    private static String tr(String key, Object... args) {
+        return Component.translatable(Msg.PREFIX + key, args).getString();
+    }
 
     private final AtmScreenHandler handler;
 
     private enum AtmState { PIN, ACCOUNT_SELECT, MAIN_MENU, DEPOSIT, WITHDRAW, TRANSFER, CHANGE_PIN }
 
-    private static final String PERSONAL_LABEL = "Compte personnel";
+    private static String personalLabel() {
+        return tr("gui.personal_account");
+    }
     private static final int MAX_COMPANY_BUTTONS = 8;
 
     /** Entreprises dont le joueur est le patron (envoyees avec la reponse au PIN) ; vide pour un joueur normal. */
     private List<CompanyChoice> companies = List.of();
-    private String accountLabel = PERSONAL_LABEL;
-    private String pendingAccountLabel = PERSONAL_LABEL;
+    private String accountLabel = personalLabel();
+    private String pendingAccountLabel = personalLabel();
     /** Vrai entre l'envoi d'un choix de compte et sa reponse, pour ne pas confondre avec une reponse d'operation. */
     private boolean awaitingAccountSelection;
 
     private AtmState state = AtmState.PIN;
     private final StringBuilder pinInput = new StringBuilder();
     private BigDecimal currentBalance = BigDecimal.ZERO;
-    private Component message = Component.literal(PIN_HINT);
+    private Component message = Component.literal(pinHint());
     private int messageColorInt = 0xFFFFFF;
 
     private final List<Button> pinButtons = new ArrayList<>();
@@ -72,9 +83,9 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         switch (state) {
             case PIN -> buildPinScreen();
             case MAIN_MENU -> buildMainMenu();
-            case DEPOSIT -> buildAmountScreen("Depot", false);
-            case WITHDRAW -> buildAmountScreen("Retrait", false);
-            case TRANSFER -> buildAmountScreen("Virement", true);
+            case DEPOSIT -> buildAmountScreen(tr("gui.deposit"), false);
+            case WITHDRAW -> buildAmountScreen(tr("gui.withdraw"), false);
+            case TRANSFER -> buildAmountScreen(tr("gui.transfer"), true);
             case CHANGE_PIN -> buildChangePinScreen();
             case ACCOUNT_SELECT -> buildAccountSelectScreen();
         }
@@ -98,7 +109,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             addRenderableWidget(button);
         }
 
-        Button delete = Button.builder(Component.literal("Eff"), btn -> deletePin())
+        Button delete = Button.builder(Component.translatable(Msg.PREFIX + "gui.key_delete"), btn -> deletePin())
                 .pos(startX, startY + 3 * (btnSize + pad)).size(btnSize, btnSize).build();
         pinButtons.add(delete);
         addRenderableWidget(delete);
@@ -108,7 +119,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         pinButtons.add(zero);
         addRenderableWidget(zero);
 
-        Button close = Button.builder(Component.literal("Fer"), btn -> onClose())
+        Button close = Button.builder(Component.translatable(Msg.PREFIX + "gui.key_close"), btn -> onClose())
                 .pos(startX + (btnSize + pad) * 2, startY + 3 * (btnSize + pad)).size(btnSize, btnSize).build();
         pinButtons.add(close);
         addRenderableWidget(close);
@@ -119,24 +130,24 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         int y = this.height / 2 - 36;
         int step = 22;
         int width = 120;
-        addRenderableWidget(Button.builder(Component.literal("Depot"), btn -> { state = AtmState.DEPOSIT; rebuildScreen(); })
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.deposit"), btn -> { state = AtmState.DEPOSIT; rebuildScreen(); })
                 .pos(cx - width / 2, y).size(width, 20).build());
         y += step;
-        addRenderableWidget(Button.builder(Component.literal("Retrait"), btn -> { state = AtmState.WITHDRAW; rebuildScreen(); })
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.withdraw"), btn -> { state = AtmState.WITHDRAW; rebuildScreen(); })
                 .pos(cx - width / 2, y).size(width, 20).build());
         y += step;
-        addRenderableWidget(Button.builder(Component.literal("Virement"), btn -> { state = AtmState.TRANSFER; rebuildScreen(); })
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.transfer"), btn -> { state = AtmState.TRANSFER; rebuildScreen(); })
                 .pos(cx - width / 2, y).size(width, 20).build());
         y += step;
-        addRenderableWidget(Button.builder(Component.literal("Changer PIN"), btn -> { state = AtmState.CHANGE_PIN; rebuildScreen(); })
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.change_pin"), btn -> { state = AtmState.CHANGE_PIN; rebuildScreen(); })
                 .pos(cx - width / 2, y).size(width, 20).build());
         y += step;
         if (!companies.isEmpty()) {
-            addRenderableWidget(Button.builder(Component.literal("Changer de compte"), btn -> { state = AtmState.ACCOUNT_SELECT; rebuildScreen(); })
+            addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.change_account"), btn -> { state = AtmState.ACCOUNT_SELECT; rebuildScreen(); })
                     .pos(cx - width / 2, y).size(width, 20).build());
             y += step;
         }
-        addRenderableWidget(Button.builder(Component.literal("Fermer"), btn -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.close"), btn -> onClose())
                 .pos(cx - width / 2, y + 6).size(width, 20).build());
     }
 
@@ -146,7 +157,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         int y = this.height / 2 - 52;
         int width = 150;
 
-        addRenderableWidget(Button.builder(Component.literal(PERSONAL_LABEL), btn -> selectAccount(AtmSelectAccountPacket.PERSONAL, PERSONAL_LABEL))
+        addRenderableWidget(Button.builder(Component.literal(personalLabel()), btn -> selectAccount(AtmSelectAccountPacket.PERSONAL, personalLabel()))
                 .pos(cx - width / 2, y).size(width, 20).build());
         y += 22;
         int shown = 0;
@@ -165,7 +176,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         pendingAccountLabel = label;
         awaitingAccountSelection = true;
         ModNetworking.CHANNEL.sendToServer(new AtmSelectAccountPacket(companyId));
-        setMessage("Chargement du compte...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.loading"), 0xAAAAAA);
     }
 
     private void buildChangePinScreen() {
@@ -173,16 +184,16 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         int cy = this.height / 2 - 12;
         int width = 132;
 
-        newPinField = new EditBox(this.font, cx - width / 2, cy, width, 18, Component.literal("Nouveau PIN"));
-        newPinField.setHint(Component.literal("Nouveau PIN (4 chiffres)"));
+        newPinField = new EditBox(this.font, cx - width / 2, cy, width, 18, Component.translatable(Msg.PREFIX + "gui.new_pin"));
+        newPinField.setHint(Component.translatable(Msg.PREFIX + "gui.new_pin_hint"));
         newPinField.setMaxLength(4);
         newPinField.setFilter(text -> text.chars().allMatch(Character::isDigit));
         addRenderableWidget(newPinField);
 
-        addRenderableWidget(Button.builder(Component.literal("Valider"), btn -> doChangePin())
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.confirm"), btn -> doChangePin())
                 .pos(cx - width / 2, cy + 28).size(width, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("Retour"), btn -> goToMainMenu())
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.back"), btn -> goToMainMenu())
                 .pos(cx - width / 2, cy + 54).size(width, 20).build());
     }
 
@@ -193,15 +204,15 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
 
         if (transfer) {
             int prefixWidth = this.font.width("ACC-") + 8;
-            transferTargetField = new EditBox(this.font, cx - width / 2 + prefixWidth, cy, width - prefixWidth, 18, Component.literal("Compte"));
-            transferTargetField.setHint(Component.literal("Numero"));
+            transferTargetField = new EditBox(this.font, cx - width / 2 + prefixWidth, cy, width - prefixWidth, 18, Component.translatable(Msg.PREFIX + "gui.account"));
+            transferTargetField.setHint(Component.translatable(Msg.PREFIX + "gui.number"));
             transferFieldHasPrefix = true;
             addRenderableWidget(transferTargetField);
             cy += 28;
         }
 
-        amountField = new EditBox(this.font, cx - width / 2, cy, width, 18, Component.literal("Montant"));
-        amountField.setHint(Component.literal("Montant"));
+        amountField = new EditBox(this.font, cx - width / 2, cy, width, 18, Component.translatable(Msg.PREFIX + "gui.amount"));
+        amountField.setHint(Component.translatable(Msg.PREFIX + "gui.amount"));
         addRenderableWidget(amountField);
 
         addRenderableWidget(Button.builder(Component.literal(action), btn -> {
@@ -213,14 +224,14 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             }
         }).pos(cx - width / 2, cy + 28).size(width, 20).build());
 
-        addRenderableWidget(Button.builder(Component.literal("Retour"), btn -> goToMainMenu())
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.back"), btn -> goToMainMenu())
                 .pos(cx - width / 2, cy + 54).size(width, 20).build());
     }
 
     private void appendPin(int num) {
         if (pinInput.length() < 4) {
             pinInput.append(num);
-            setMessage(PIN_HINT, 0xFFFFFF);
+            setMessage(pinHint(), 0xFFFFFF);
             if (pinInput.length() == 4) sendPinToServer();
         }
     }
@@ -232,17 +243,17 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
     private void sendPinToServer() {
         int pin = Integer.parseInt(pinInput.toString());
         ModNetworking.CHANNEL.sendToServer(new PinCheckPacket(pin));
-        setMessage("Verification...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.checking"), 0xAAAAAA);
     }
 
     public void onPinResponse(boolean success, double balance, String responseMessage, List<CompanyChoice> ownedCompanies) {
         if (success) {
             currentBalance = BigDecimal.valueOf(balance);
             companies = List.copyOf(ownedCompanies);
-            accountLabel = PERSONAL_LABEL;
+            accountLabel = personalLabel();
             // Un patron choisit d'abord son compte ; les autres joueurs arrivent directement sur le menu.
             state = companies.isEmpty() ? AtmState.MAIN_MENU : AtmState.ACCOUNT_SELECT;
-            setMessage(companies.isEmpty() ? "Solde : " + currentBalance + " EUR" : "Choisissez un compte.", 0xFFFFFF);
+            setMessage(companies.isEmpty() ? Msg.of(Msg.PREFIX + "gui.balance", currentBalance + " " + Money.CURRENCY) : Msg.of(Msg.PREFIX + "gui.choose_account"), 0xFFFFFF);
             rebuildScreen();
         } else {
             setMessage(responseMessage, 0xFF4444);
@@ -254,7 +265,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         BigDecimal amount = parseAmount();
         if (amount == null) return;
         ModNetworking.CHANNEL.sendToServer(new AtmActionPacket(AtmActionPacket.ActionType.DEPOSIT, amount.toPlainString(), ""));
-        setMessage("Traitement du depot...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.processing_deposit"), 0xAAAAAA);
         amountField.setValue("");
     }
 
@@ -262,14 +273,14 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         BigDecimal amount = parseAmount();
         if (amount == null) return;
         ModNetworking.CHANNEL.sendToServer(new AtmActionPacket(AtmActionPacket.ActionType.WITHDRAW, amount.toPlainString(), ""));
-        setMessage("Traitement du retrait...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.processing_withdraw"), 0xAAAAAA);
         amountField.setValue("");
     }
 
     private void doTransfer() {
         String target = transferTargetField != null ? transferTargetField.getValue().trim() : "";
         if (target.isEmpty()) {
-            setMessage("Numero destinataire vide", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.target_empty"), 0xFF4444);
             return;
         }
 
@@ -277,7 +288,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         if (amount == null) return;
 
         ModNetworking.CHANNEL.sendToServer(new AtmActionPacket(AtmActionPacket.ActionType.TRANSFER, amount.toPlainString(), target));
-        setMessage("Traitement du virement...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.processing_transfer"), 0xAAAAAA);
         amountField.setValue("");
         transferTargetField.setValue("");
     }
@@ -290,7 +301,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
                 accountLabel = pendingAccountLabel;
                 currentBalance = BigDecimal.valueOf(balance);
                 state = AtmState.MAIN_MENU;
-                setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
+                setMessage(Msg.of(Msg.PREFIX + "gui.balance", currentBalance + " " + Money.CURRENCY), 0xFFFFFF);
                 rebuildScreen();
             } else {
                 setMessage(responseMessage, 0xFF4444);
@@ -298,18 +309,18 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             return;
         }
         currentBalance = BigDecimal.valueOf(balance);
-        String suffix = success ? ". Solde : " + currentBalance + " EUR" : "";
-        setMessage(responseMessage + suffix, success ? 0x44FF44 : 0xFF4444);
+        Component suffix = success ? Component.literal(" ").append(Component.translatable(Msg.PREFIX + "gui.balance", currentBalance + " " + Money.CURRENCY)) : Component.empty();
+        setMessage(Msg.component(responseMessage).copy().append(suffix), success ? 0x44FF44 : 0xFF4444);
     }
 
     private void doChangePin() {
         String pin = newPinField != null ? newPinField.getValue().trim() : "";
         if (pin.length() != 4) {
-            setMessage("Le PIN doit contenir 4 chiffres.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "pin.four_digits"), 0xFF4444);
             return;
         }
         ModNetworking.CHANNEL.sendToServer(new SetCardPinPacket(pin));
-        setMessage("Enregistrement...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.saving"), 0xAAAAAA);
     }
 
     public void onPinChangeResponse(boolean success, String responseMessage) {
@@ -323,30 +334,34 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         if (amountField == null) return null;
         String text = amountField.getValue().trim().replace(",", ".");
         if (text.isEmpty()) {
-            setMessage("Montant vide", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.amount_empty"), 0xFF4444);
             return null;
         }
         try {
             BigDecimal amount = new BigDecimal(text);
             if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-                setMessage("Montant invalide", 0xFF4444);
+                setMessage(Msg.of(Msg.PREFIX + "tx.invalid_amount"), 0xFF4444);
                 return null;
             }
             return amount;
         } catch (NumberFormatException e) {
-            setMessage("Format invalide", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.invalid_format"), 0xFF4444);
             return null;
         }
     }
 
     private void setMessage(String text, int color) {
-        message = Component.literal(text);
+        setMessage(Msg.component(text), color);
+    }
+
+    private void setMessage(Component text, int color) {
+        message = text;
         messageColorInt = color;
     }
 
     private void goToMainMenu() {
         state = AtmState.MAIN_MENU;
-        setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
+        setMessage(Msg.of(Msg.PREFIX + "gui.balance", currentBalance + " " + Money.CURRENCY), 0xFFFFFF);
         rebuildScreen();
     }
 
@@ -368,11 +383,11 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         renderMinimalFrame(g);
         renderHeader(g, switch (state) {
             case MAIN_MENU -> "ATM";
-            case DEPOSIT -> "Depot";
-            case WITHDRAW -> "Retrait";
-            case TRANSFER -> "Virement";
-            case CHANGE_PIN -> "Changer PIN";
-            case ACCOUNT_SELECT -> "Choix du compte";
+            case DEPOSIT -> tr("gui.deposit");
+            case WITHDRAW -> tr("gui.withdraw");
+            case TRANSFER -> tr("gui.transfer");
+            case CHANGE_PIN -> tr("gui.change_pin");
+            case ACCOUNT_SELECT -> tr("gui.choose_account_title");
             default -> "ATM";
         });
         if (state != AtmState.ACCOUNT_SELECT) {
@@ -421,7 +436,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
     }
 
     private void renderBalance(GuiGraphics g) {
-        String balance = "Solde : " + currentBalance + " EUR";
+        String balance = tr("gui.balance", currentBalance + " " + Money.CURRENCY);
         g.drawString(this.font, balance, this.width / 2 - this.font.width(balance) / 2, this.height / 2 - 74, 0xB8D8B8, false);
     }
 
@@ -437,7 +452,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
 
     private void renderMessage(GuiGraphics g, int startY, int width) {
         String currentMessage = message.getString();
-        if (currentMessage.isBlank() || (state == AtmState.PIN && PIN_HINT.equals(currentMessage))) {
+        if (currentMessage.isBlank() || (state == AtmState.PIN && pinHint().equals(currentMessage))) {
             return;
         }
 

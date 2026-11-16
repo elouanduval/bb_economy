@@ -1,5 +1,6 @@
 package org.bb.bb_economy.blocks;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
@@ -79,7 +80,7 @@ public class TpeBlock extends BaseEntityBlock {
 
             OptionalInt companyId = BankManager.parseCompanyId(tpeBlockEntity.getCompanyId());
             if (companyId.isEmpty()) {
-                player.displayClientMessage(Component.literal("Ce TPE n'est lie a aucune entreprise."), true);
+                player.displayClientMessage(Component.translatable(Msg.PREFIX + "tpe.no_company"), true);
                 return InteractionResult.SUCCESS;
             }
             if (!(player instanceof ServerPlayer serverPlayer)) {
@@ -100,12 +101,12 @@ public class TpeBlock extends BaseEntityBlock {
                     return;
                 }
                 if (cards.isEmpty()) {
-                    player.displayClientMessage(Component.literal("Vous devez cliquer avec votre carte bancaire en main pour utiliser ce TPE."), true);
+                    player.displayClientMessage(Component.translatable(Msg.PREFIX + "tpe.hold_card"), true);
                     return;
                 }
                 BankManager.ownsAnyOf(serverPlayer, cards, owned -> {
                     if (!owned) {
-                        player.displayClientMessage(Component.literal("Vous devez cliquer avec votre carte bancaire en main pour utiliser ce TPE."), true);
+                        player.displayClientMessage(Component.translatable(Msg.PREFIX + "tpe.hold_card"), true);
                         return;
                     }
                     if (level.getBlockEntity(pos) != tpeBlockEntity) {

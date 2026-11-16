@@ -10,7 +10,9 @@ import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 import org.bb.bb_economy.blocks.AtmBlock;
 import org.bb.bb_economy.BB_Economy;
+import org.bb.bb_economy.blocks.ShopBlock;
 import org.bb.bb_economy.blocks.TpeBlock;
+import org.bb.bb_economy.item.ShopItem;
 import org.bb.bb_economy.item.TpeItem;
 
 public class ModBlocks {
@@ -28,6 +30,12 @@ public class ModBlocks {
 
     public static final RegistryObject<Item> TPE_BLOCK_ITEM = ITEMS.register("tpe",
             () -> new TpeItem(TPE_BLOCK.get(), new Item.Properties()));
+
+    public static final RegistryObject<Block> SHOP_BLOCK = BLOCKS.register("shop",
+            () -> new ShopBlock(BlockBehaviour.Properties.of().strength(2.5f)));
+
+    public static final RegistryObject<Item> SHOP_BLOCK_ITEM = ITEMS.register("shop",
+            () -> new ShopItem(SHOP_BLOCK.get(), new Item.Properties()));
 
     public static void register(IEventBus eventBus) {
         BLOCKS.register(eventBus);

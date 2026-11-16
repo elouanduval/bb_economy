@@ -514,6 +514,52 @@ class BankLedgerTest {
         assertTrue(ledger.renumberCard("CARD-DOES-NOT-EXIST").isEmpty());
     }
 
+    // --- boutiques automatiques -----------------------------------------------
+
+    @Test
+    void shopCashTradesMoveTheCompanyAccountAndAreLoggedWithTheirOwnTypes() throws SQLException {
+        String company = ledger.createCompanyAccount(1, bd("100")).orElseThrow();
+
+        // le joueur remet 30 en billets a la boutique : le compte de l'entreprise est credite
+        assertEquals(TxResult.OK, ledger.creditCash(company, bd("30"), BankLedger.TYPE_SHOP_BUY_CASH, DAY));
+        assertEquals(0, bd("130").compareTo(ledger.findBalance(company).orElseThrow()));
+        // la boutique achete des objets en liquide : le compte est debite
+        assertEquals(TxResult.OK, ledger.debitCash(company, bd("130"), BankLedger.TYPE_SHOP_SELL_CASH, DAY));
+        assertEquals(0, BigDecimal.ZERO.compareTo(ledger.findBalance(company).orElseThrow()));
+
+        assertEquals(1, countTransactions(BankLedger.TYPE_SHOP_BUY_CASH));
+        assertEquals(1, countTransactions(BankLedger.TYPE_SHOP_SELL_CASH));
+    }
+
+    @Test
+    void shopCannotPayMoreThanTheCompanyHasNorFromAFrozenAccount() throws SQLException {
+        String company = ledger.createCompanyAccount(1, bd("10")).orElseThrow();
+
+        assertEquals(TxResult.INSUFFICIENT_FUNDS, ledger.debitCash(company, bd("10.01"), BankLedger.TYPE_SHOP_SELL_CASH, DAY));
+        assertEquals(0, bd("10").compareTo(ledger.findBalance(company).orElseThrow()));
+
+        ledger.setFrozen(company, true);
+        assertEquals(TxResult.ACCOUNT_FROZEN, ledger.debitCash(company, bd("1"), BankLedger.TYPE_SHOP_SELL_CASH, DAY));
+        // un compte gele peut encore encaisser
+        assertEquals(TxResult.OK, ledger.creditCash(company, bd("1"), BankLedger.TYPE_SHOP_BUY_CASH, DAY));
+    }
+
+    @Test
+    void shopCardTradesAreOrdinaryTransfersBetweenThePlayerAndTheCompanyAccount() throws SQLException {
+        String company = ledger.createCompanyAccount(1, bd("50")).orElseThrow();
+        int player = profileWithBalance("20");
+
+        // le joueur vend a la boutique : l'entreprise paie sur le compte du joueur
+        assertEquals(TxResult.OK, ledger.transferBetweenAccounts(company, accountOf(player), bd("30"), BankLedger.TYPE_SHOP_SELL, DAY));
+        assertEquals(0, bd("50").compareTo(balanceOf(player)));
+        // le joueur achete : il paie l'entreprise
+        assertEquals(TxResult.OK, ledger.transferBetweenAccounts(accountOf(player), company, bd("50"), BankLedger.TYPE_SHOP_BUY, DAY));
+        assertEquals(0, bd("70").compareTo(ledger.findBalance(company).orElseThrow()));
+        // l'entreprise ne peut pas payer plus que son solde
+        assertEquals(TxResult.INSUFFICIENT_FUNDS,
+                ledger.transferBetweenAccounts(company, accountOf(player), bd("70.01"), BankLedger.TYPE_SHOP_SELL, DAY));
+    }
+
     // --- concurrence ---------------------------------------------------------
 
     @Test

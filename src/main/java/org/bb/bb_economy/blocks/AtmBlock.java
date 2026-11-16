@@ -1,5 +1,6 @@
 package org.bb.bb_economy.blocks;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
@@ -48,14 +49,14 @@ public class AtmBlock extends Block {
             // Lu sur le thread principal, avant le premier appel base.
             BankManager.HandCards cards = BankManager.cardsInHand(player);
             if (cards.isEmpty()) {
-                player.displayClientMessage(Component.literal("Vous devez tenir votre carte bancaire en main !"), true);
+                player.displayClientMessage(Component.translatable(Msg.PREFIX + "atm.hold_card"), true);
                 return InteractionResult.SUCCESS;
             }
             // La carte doit appartenir au joueur (profil actif). Le patron d'une ou plusieurs entreprises peut
             // ensuite choisir leur compte a l'ecran (voir AtmSelectAccountPacket).
             BankManager.resolveAtmSession(serverPlayer, cards, session -> {
                 if (session.isEmpty()) {
-                    player.displayClientMessage(Component.literal("Cette carte n'est pas la votre ou n'est liee a aucun compte."), true);
+                    player.displayClientMessage(Component.translatable(Msg.PREFIX + "atm.card_not_yours"), true);
                     return;
                 }
                 AtmScreenHandler.open(player, pos, session.get());

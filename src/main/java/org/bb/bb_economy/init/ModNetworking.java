@@ -7,6 +7,8 @@ import net.minecraftforge.network.simple.SimpleChannel;
 import org.bb.bb_economy.network.AtmActionPacket;
 import org.bb.bb_economy.network.AtmActionResponsePacket;
 import org.bb.bb_economy.network.AtmSelectAccountPacket;
+import org.bb.bb_economy.network.ShopTradePacket;
+import org.bb.bb_economy.network.ShopTradeResponsePacket;
 import org.bb.bb_economy.network.OpenPinSetupPacket;
 import org.bb.bb_economy.network.PinCheckPacket;
 import org.bb.bb_economy.network.PinResponsePacket;
@@ -19,7 +21,7 @@ import org.bb.bb_economy.network.TpeSetAmountResponsePacket;
 
 public class ModNetworking {
 
-    private static final String PROTOCOL_VERSION = "3";
+    private static final String PROTOCOL_VERSION = "4";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.tryParse("bb_economy:main"),
@@ -125,6 +127,22 @@ public class ModNetworking {
                 AtmSelectAccountPacket::decode,
                 AtmSelectAccountPacket::handle,
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
+        );
+
+        CHANNEL.registerMessage(id++,
+                ShopTradePacket.class,
+                ShopTradePacket::encode,
+                ShopTradePacket::decode,
+                ShopTradePacket::handle,
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
+        );
+
+        CHANNEL.registerMessage(id++,
+                ShopTradeResponsePacket.class,
+                ShopTradeResponsePacket::encode,
+                ShopTradeResponsePacket::decode,
+                ShopTradeResponsePacket::handle,
+                java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
     }
 }

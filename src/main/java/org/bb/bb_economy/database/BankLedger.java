@@ -32,6 +32,12 @@ public final class BankLedger {
     public static final String TYPE_INITIAL = "INITIAL";
     public static final String TYPE_ADMIN_CREDIT = "ADMIN_CREDIT";
     public static final String TYPE_ADMIN_DEBIT = "ADMIN_DEBIT";
+    /** Boutiques automatiques, par carte : le joueur vend a la boutique / achete a la boutique. */
+    public static final String TYPE_SHOP_SELL = "SHOP_SELL";
+    public static final String TYPE_SHOP_BUY = "SHOP_BUY";
+    /** Boutiques automatiques, en liquide : meme sens, mais les billets sont remis ou repris au joueur. */
+    public static final String TYPE_SHOP_SELL_CASH = "SHOP_SELL_CASH";
+    public static final String TYPE_SHOP_BUY_CASH = "SHOP_BUY_CASH";
 
     public static final String PERSONAL = "personal";
 
@@ -358,6 +364,31 @@ public final class BankLedger {
 
     /** Cree de l'argent sur un compte (origine NULL dans le grand livre). */
     public TxResult adminCredit(String accountNumber, BigDecimal amount, long inGameDay) {
+        return credit(accountNumber, amount, TYPE_ADMIN_CREDIT, inGameDay);
+    }
+
+    /** Retire de l'argent d'un compte (cible NULL dans le grand livre), sans jamais le rendre negatif. */
+    public TxResult adminDebit(String accountNumber, BigDecimal amount, long inGameDay) {
+        return debit(accountNumber, amount, TYPE_ADMIN_DEBIT, inGameDay, true);
+    }
+
+    /**
+     * Credite un compte de billets que le joueur vient de remettre (paiement en liquide a une boutique) : origine
+     * NULL dans le grand livre. Les billets doivent deja avoir ete retires du joueur. Un compte gele peut recevoir.
+     */
+    public TxResult creditCash(String accountNumber, BigDecimal amount, String type, long inGameDay) {
+        return credit(accountNumber, amount, type, inGameDay);
+    }
+
+    /**
+     * Debite un compte de billets qui vont etre remis au joueur (une boutique lui achete des objets en liquide) :
+     * cible NULL dans le grand livre. Refuse si le compte est gele ou si le solde est insuffisant.
+     */
+    public TxResult debitCash(String accountNumber, BigDecimal amount, String type, long inGameDay) {
+        return debit(accountNumber, amount, type, inGameDay, false);
+    }
+
+    private TxResult credit(String accountNumber, BigDecimal amount, String type, long inGameDay) {
         if (!Money.isValid(amount)) {
             return TxResult.INVALID_AMOUNT;
         }
@@ -371,13 +402,12 @@ public final class BankLedger {
                 return TxResult.BALANCE_OVERFLOW;
             }
             updateBalance(conn, accountNumber, newBalance);
-            logTransaction(conn, TYPE_ADMIN_CREDIT, amount, null, accountNumber, inGameDay);
+            logTransaction(conn, type, amount, null, accountNumber, inGameDay);
             return TxResult.OK;
         });
     }
 
-    /** Retire de l'argent d'un compte (cible NULL dans le grand livre), sans jamais le rendre negatif. */
-    public TxResult adminDebit(String accountNumber, BigDecimal amount, long inGameDay) {
+    private TxResult debit(String accountNumber, BigDecimal amount, String type, long inGameDay, boolean ignoreFrozen) {
         if (!Money.isValid(amount)) {
             return TxResult.INVALID_AMOUNT;
         }
@@ -386,11 +416,14 @@ public final class BankLedger {
             if (account == null) {
                 return TxResult.NO_ACCOUNT;
             }
+            if (account.frozen() && !ignoreFrozen) {
+                return TxResult.ACCOUNT_FROZEN;
+            }
             if (account.balance().compareTo(amount) < 0) {
                 return TxResult.INSUFFICIENT_FUNDS;
             }
             updateBalance(conn, accountNumber, account.balance().subtract(amount));
-            logTransaction(conn, TYPE_ADMIN_DEBIT, amount, accountNumber, null, inGameDay);
+            logTransaction(conn, type, amount, accountNumber, null, inGameDay);
             return TxResult.OK;
         });
     }

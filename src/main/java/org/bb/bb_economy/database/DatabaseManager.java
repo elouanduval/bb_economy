@@ -173,6 +173,18 @@ public class DatabaseManager {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """);
 
+            // Lot d'une offre de boutique automatique (ex. 32 bois pour 10). La table des offres appartient au
+            // plugin des entreprises et son prix est un FLOAT : le lot et son prix exact sont ici, lies par l'id de
+            // l'offre. Pas de cle etrangere : la table du plugin peut ne pas exister encore au demarrage.
+            stmt.execute("""
+                CREATE TABLE IF NOT EXISTS bb_shop_offer_bundles (
+                    offer_id     INT           NOT NULL,
+                    bundle_size  INT           NOT NULL,
+                    bundle_price DECIMAL(12,2) NOT NULL,
+                    PRIMARY KEY (offer_id)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """);
+
             // Les salaires ne sont plus geres par bb_economy (le patron paie a la main). Sur une base creee par une
             // ancienne version, la table bb_jobs existante n'est pas supprimee automatiquement : elle est ignoree.
 

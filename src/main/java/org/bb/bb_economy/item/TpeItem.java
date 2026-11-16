@@ -1,5 +1,6 @@
 package org.bb.bb_economy.item;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.BlockItem;
@@ -45,12 +46,12 @@ public class TpeItem extends BlockItem {
 
         String companyId = getCompanyId(stack);
         if (!companyId.isBlank()) {
-            tooltip.add(Component.literal("Entreprise : " + companyId).withStyle(ChatFormatting.GRAY));
+            tooltip.add(Component.translatable(Msg.PREFIX + "item.company", companyId).withStyle(ChatFormatting.GRAY));
         }
 
         String companyAccount = getCompanyAccount(stack);
         if (!companyAccount.isBlank()) {
-            tooltip.add(Component.literal("Compte : " + companyAccount).withStyle(ChatFormatting.DARK_GRAY));
+            tooltip.add(Component.translatable(Msg.PREFIX + "item.account", companyAccount).withStyle(ChatFormatting.DARK_GRAY));
         }
     }
 }

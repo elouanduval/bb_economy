@@ -108,7 +108,7 @@ public class TpeScreenHandler extends AbstractContainerMenu {
 
         @Override
         public Component getDisplayName() {
-            return Component.literal("TPE");
+            return Component.translatable("block.bb_economy.tpe");
         }
 
         @Override

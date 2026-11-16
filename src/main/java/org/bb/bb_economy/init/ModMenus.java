@@ -7,6 +7,7 @@ import net.minecraftforge.registries.ForgeRegistries;
 import net.minecraftforge.registries.RegistryObject;
 import org.bb.bb_economy.BB_Economy;
 import org.bb.bb_economy.gui.AtmScreenHandler;
+import org.bb.bb_economy.gui.ShopScreenHandler;
 import org.bb.bb_economy.gui.TpeScreenHandler;
 
 public class ModMenus {
@@ -21,4 +22,8 @@ public class ModMenus {
     public static final RegistryObject<MenuType<TpeScreenHandler>> TPE_MENU =
             MENUS.register("tpe_menu",
                     () -> IForgeMenuType.create(TpeScreenHandler::new));
+
+    public static final RegistryObject<MenuType<ShopScreenHandler>> SHOP_MENU =
+            MENUS.register("shop_menu",
+                    () -> IForgeMenuType.create(ShopScreenHandler::new));
 }

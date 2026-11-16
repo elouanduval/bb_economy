@@ -1,5 +1,6 @@
 package org.bb.bb_economy.gui;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -8,6 +9,7 @@ import net.minecraft.client.gui.screens.inventory.MenuAccess;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
+import org.bb.bb_economy.database.Money;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.network.PinCheckPacket;
 import org.bb.bb_economy.network.TpePaymentPacket;
@@ -40,8 +42,8 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         this.handler = handler;
         this.currentAmount = handler.getPendingAmount();
         this.message = handler.getAccessMode() == TpeScreenHandler.AccessMode.SELLER
-                ? Component.literal("Entrez le montant a payer.")
-                : Component.literal("Entrez votre code PIN.");
+                ? Component.translatable(Msg.PREFIX + "gui.enter_amount_to_pay")
+                : Component.translatable(Msg.PREFIX + "gui.enter_pin_code");
     }
 
     @Override
@@ -71,20 +73,20 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         int x = this.width / 2 - width / 2;
         int y = this.height / 2 - 18;
 
-        amountField = new EditBox(this.font, x, y, width, 18, Component.literal("Montant"));
+        amountField = new EditBox(this.font, x, y, width, 18, Component.translatable(Msg.PREFIX + "gui.amount"));
         if (currentAmount.compareTo(BigDecimal.ZERO) > 0) {
             amountField.setValue(currentAmount.stripTrailingZeros().toPlainString());
         }
         amountField.setHint(Component.literal("0.00"));
         addRenderableWidget(amountField);
 
-        validateButton = Button.builder(Component.literal("Valider"), button -> submitSellerAmount())
+        validateButton = Button.builder(Component.translatable(Msg.PREFIX + "gui.confirm"), button -> submitSellerAmount())
                 .pos(x, y + 28)
                 .size(width, 20)
                 .build();
         addRenderableWidget(validateButton);
 
-        addRenderableWidget(Button.builder(Component.literal("Fermer"), button -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.close"), button -> onClose())
                 .pos(x, y + 54)
                 .size(width, 20)
                 .build());
@@ -110,7 +112,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
             addRenderableWidget(button);
         }
 
-        Button delete = Button.builder(Component.literal("Eff"), btn -> deletePin())
+        Button delete = Button.builder(Component.translatable(Msg.PREFIX + "gui.key_delete"), btn -> deletePin())
                 .pos(startX, startY + 3 * (btnSize + pad))
                 .size(btnSize, btnSize)
                 .build();
@@ -124,7 +126,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         pinButtons.add(zero);
         addRenderableWidget(zero);
 
-        Button close = Button.builder(Component.literal("Fermer"), btn -> onClose())
+        Button close = Button.builder(Component.translatable(Msg.PREFIX + "gui.close"), btn -> onClose())
                 .pos(startX + (btnSize + pad) * 2, startY + 3 * (btnSize + pad))
                 .size(btnSize, btnSize)
                 .build();
@@ -137,14 +139,14 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         int x = this.width / 2 - width / 2;
         int y = this.height / 2 + 8;
 
-        validateButton = Button.builder(Component.literal("Payer"), button -> submitBuyerPayment())
+        validateButton = Button.builder(Component.translatable(Msg.PREFIX + "gui.pay"), button -> submitBuyerPayment())
                 .pos(x, y)
                 .size(width, 20)
                 .build();
         validateButton.active = buyerPinValidated && currentAmount.compareTo(BigDecimal.ZERO) > 0;
         addRenderableWidget(validateButton);
 
-        addRenderableWidget(Button.builder(Component.literal("Annuler"), button -> onClose())
+        addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.cancel"), button -> onClose())
                 .pos(x, y + 26)
                 .size(width, 20)
                 .build());
@@ -157,46 +159,46 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         }
 
         validateButton.active = false;
-        setMessage("Enregistrement du montant...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.saving_amount"), 0xAAAAAA);
         ModNetworking.CHANNEL.sendToServer(new TpeSetAmountPacket(handler.getPos(), amount.toPlainString()));
     }
 
     private void submitBuyerPayment() {
         if (!buyerPinValidated) {
-            setMessage("PIN non valide.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.pin_not_valid"), 0xFF4444);
             return;
         }
 
         if (currentAmount.compareTo(BigDecimal.ZERO) <= 0) {
-            setMessage("Aucun montant n'est en attente sur ce TPE.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "tpe.no_pending"), 0xFF4444);
             return;
         }
 
         validateButton.active = false;
-        setMessage("Paiement en cours...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.paying"), 0xAAAAAA);
         ModNetworking.CHANNEL.sendToServer(new TpePaymentPacket(handler.getPos(), currentAmount.toPlainString()));
     }
 
     private BigDecimal parseAmount() {
         String value = amountField.getValue().trim().replace(",", ".");
         if (value.isEmpty()) {
-            setMessage("Montant vide.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.amount_empty"), 0xFF4444);
             return null;
         }
 
         try {
             BigDecimal amount = new BigDecimal(value);
             if (amount.compareTo(BigDecimal.ZERO) <= 0) {
-                setMessage("Le montant doit etre superieur a 0.", 0xFF4444);
+                setMessage(Msg.of(Msg.PREFIX + "gui.amount_positive"), 0xFF4444);
                 return null;
             }
             if (amount.scale() > 2) {
-                setMessage("Maximum 2 decimales.", 0xFF4444);
+                setMessage(Msg.of(Msg.PREFIX + "gui.max_decimals"), 0xFF4444);
                 return null;
             }
             return amount;
         } catch (NumberFormatException e) {
-            setMessage("Format de montant invalide.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.invalid_format"), 0xFF4444);
             return null;
         }
     }
@@ -204,7 +206,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
     private void appendPin(int num) {
         if (pinInput.length() < 4) {
             pinInput.append(num);
-            setMessage("Entrez votre code PIN.", 0xEAEAEA);
+            setMessage(Msg.of(Msg.PREFIX + "gui.enter_pin_code"), 0xEAEAEA);
             if (pinInput.length() == 4) {
                 sendPinToServer();
             }
@@ -219,7 +221,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
 
     private void sendPinToServer() {
         int pin = Integer.parseInt(pinInput.toString());
-        setMessage("Verification du PIN...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.checking_pin"), 0xAAAAAA);
         ModNetworking.CHANNEL.sendToServer(new PinCheckPacket(pin));
     }
 
@@ -231,7 +233,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
         if (success) {
             buyerPinValidated = true;
             buyerState = BuyerState.CONFIRM;
-            setMessage("PIN valide. Vous pouvez payer.", 0x44FF44);
+            setMessage(Msg.of(Msg.PREFIX + "gui.pin_ok_can_pay"), 0x44FF44);
             rebuildScreen();
         } else {
             buyerPinValidated = false;
@@ -280,7 +282,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
     }
 
     private void setMessage(String text, int color) {
-        this.message = Component.literal(text);
+        this.message = Msg.component(text);
         this.messageColor = color;
     }
 
@@ -321,13 +323,13 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
 
     private void renderHeader(GuiGraphics graphics) {
         String title = handler.getAccessMode() == TpeScreenHandler.AccessMode.SELLER
-                ? "TPE vendeur - " + handler.getCompanyId()
-                : "TPE acheteur - " + handler.getCompanyId();
+                ? Msg.tr("gui.tpe_seller", handler.getCompanyId())
+                : Msg.tr("gui.tpe_buyer", handler.getCompanyId());
         graphics.drawString(this.font, title, this.width / 2 - this.font.width(title) / 2, this.height / 2 - 84, 0xEAEAEA, false);
     }
 
     private void renderAmountInfo(GuiGraphics graphics) {
-        String amountText = "Montant : " + currentAmount.stripTrailingZeros().toPlainString() + " EUR";
+        String amountText = Msg.tr("gui.amount_label", currentAmount.stripTrailingZeros().toPlainString() + " " + Money.CURRENCY);
         graphics.drawString(this.font, amountText, this.width / 2 - this.font.width(amountText) / 2, this.height / 2 - 64, 0xB8D8B8, false);
     }
 
@@ -338,8 +340,8 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
 
     private void renderBuyerPaymentInfo(GuiGraphics graphics) {
         String label = currentAmount.compareTo(BigDecimal.ZERO) > 0
-                ? "Validez le paiement ci-dessous."
-                : "Aucun montant en attente sur ce TPE.";
+                ? Msg.tr("gui.confirm_payment_below")
+                : Msg.tr("gui.no_pending_amount");
         graphics.drawString(this.font, label, this.width / 2 - this.font.width(label) / 2, this.height / 2 - 22, 0xEAEAEA, false);
     }
 
