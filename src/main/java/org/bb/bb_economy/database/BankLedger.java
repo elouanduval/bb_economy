@@ -88,6 +88,19 @@ public final class BankLedger {
         });
     }
 
+    /** Numero du compte bancaire lie a une entreprise (id de la table de l'autre mod), vide si elle n'en a pas. */
+    public Optional<String> findCompanyAccountNumber(int companyId) {
+        return inTransaction(conn -> {
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "SELECT account_number FROM bb_company_accounts WHERE company_id = ?")) {
+                stmt.setInt(1, companyId);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    return rs.next() ? Optional.of(rs.getString(1)) : Optional.<String>empty();
+                }
+            }
+        });
+    }
+
     /** Solde d'un compte quelconque, identifie par son numero. */
     public Optional<BigDecimal> findBalance(String accountNumber) {
         return inTransaction(conn -> {
@@ -155,11 +168,11 @@ public final class BankLedger {
     }
 
     /**
-     * Cree le compte bancaire d'une entreprise, rattache a un profil "proprietaire" pour la tracabilite.
-     * Vide si {@code companyId} existe deja. Contrairement au compte personnel, aucune carte n'est creee :
-     * qui a le droit d'operer sur ce compte est determine ailleurs (LuckPerms), pas par bb_economy.
+     * Cree le compte bancaire d'une entreprise (identifiee par son id dans la table de l'autre mod), rattache a un
+     * profil "proprietaire" pour la tracabilite. Vide si l'entreprise a deja un compte. Aucune carte n'est creee :
+     * les cartes sont emises a part (voir issueCard), et la verification que l'entreprise existe est faite par l'appelant.
      */
-    public Optional<String> createCompanyAccount(String companyId, int ownerProfileId, BigDecimal startingBalance) {
+    public Optional<String> createCompanyAccount(int companyId, int ownerProfileId, BigDecimal startingBalance) {
         if (startingBalance == null || startingBalance.signum() < 0 || startingBalance.scale() > 2
                 || startingBalance.compareTo(Money.MAX_AMOUNT) > 0) {
             throw new IllegalArgumentException("Solde de depart invalide : " + startingBalance);
@@ -175,8 +188,8 @@ public final class BankLedger {
                     }
                 }
             }
-            try (PreparedStatement checkCompany = conn.prepareStatement("SELECT 1 FROM bb_companies WHERE company_id = ?")) {
-                checkCompany.setString(1, companyId);
+            try (PreparedStatement checkCompany = conn.prepareStatement("SELECT 1 FROM bb_company_accounts WHERE company_id = ?")) {
+                checkCompany.setInt(1, companyId);
                 try (ResultSet rs = checkCompany.executeQuery()) {
                     if (rs.next()) {
                         return Optional.<String>empty();
@@ -189,13 +202,13 @@ public final class BankLedger {
             try (PreparedStatement insertAccount = conn.prepareStatement(
                     "INSERT INTO bb_bank_accounts (account_number, account_type, account_balance, owner) VALUES (?, 'company', ?, ?)");
                  PreparedStatement insertCompany = conn.prepareStatement(
-                         "INSERT INTO bb_companies (company_id, account_number) VALUES (?, ?)")) {
+                         "INSERT INTO bb_company_accounts (company_id, account_number) VALUES (?, ?)")) {
                 insertAccount.setString(1, accountNumber);
                 insertAccount.setBigDecimal(2, initial);
                 insertAccount.setInt(3, ownerProfileId);
                 insertAccount.executeUpdate();
 
-                insertCompany.setString(1, companyId);
+                insertCompany.setInt(1, companyId);
                 insertCompany.setString(2, accountNumber);
                 insertCompany.executeUpdate();
             }

@@ -12,6 +12,7 @@ import org.bb.bb_economy.gui.TpeScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
 
 import java.math.BigDecimal;
+import java.util.OptionalInt;
 import java.util.function.Supplier;
 
 public class TpePaymentPacket {
@@ -79,8 +80,8 @@ public class TpePaymentPacket {
             sendResponse(player, false, "Le montant a change. Verifiez-le puis validez a nouveau.", pendingText);
             return;
         }
-        String companyId = tpe.getCompanyId();
-        if (companyId.isBlank()) {
+        OptionalInt companyId = BankManager.parseCompanyId(tpe.getCompanyId());
+        if (companyId.isEmpty()) {
             sendResponse(player, false, "Compte entreprise introuvable.", pendingText);
             return;
         }
@@ -88,7 +89,7 @@ public class TpePaymentPacket {
         BankManager.HandCards cards = BankManager.cardsInHand(player);
         // Carte en main, compte de l'entreprise et paiement sont verifies/executes dans le meme aller-retour
         // base (voir BankManager.payAtTpe) : les donnees du bloc ne sont qu'un raccourci d'affichage.
-        BankManager.payAtTpe(player, cards, companyId, pendingAmount, outcome -> {
+        BankManager.payAtTpe(player, cards, companyId.getAsInt(), pendingAmount, outcome -> {
             if (outcome.outcome() != BankManager.TpeOutcome.OK) {
                 sendResponse(player, false, outcome.message(), pendingText);
                 return;

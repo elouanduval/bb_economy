@@ -7,6 +7,7 @@ import org.bb.bb_economy.Config;
 import org.slf4j.Logger;
 
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 
@@ -153,21 +154,25 @@ public class DatabaseManager {
                 ON bb_transactions (transaction_type, transaction_ingame_day, account_target)
             """);
 
+            // Les entreprises (bb_companies), leurs membres et leurs rangs appartiennent a un autre mod, qui cree
+            // ses propres tables. Ici on ne possede que le LIEN entre une entreprise et son compte bancaire.
+            // company_id est l'id (INT) de bb_companies ; la cle etrangere vers cette table est ajoutee plus bas,
+            // des qu'elle existe (l'ordre de demarrage des deux mods n'est pas garanti).
+            // ON DELETE RESTRICT : on ne peut pas supprimer un compte qui a encore un lien, pour ne jamais
+            // laisser de l'argent orphelin.
             stmt.execute("""
-                CREATE TABLE IF NOT EXISTS bb_companies (
-                    company_id     VARCHAR(20) NOT NULL,
+                CREATE TABLE IF NOT EXISTS bb_company_accounts (
+                    company_id     INT         NOT NULL,
                     account_number VARCHAR(20) NOT NULL,
                     PRIMARY KEY (company_id),
                     UNIQUE KEY uq_company_account (account_number),
-                    CONSTRAINT fk_company_account FOREIGN KEY (account_number)
+                    CONSTRAINT fk_company_account_bank FOREIGN KEY (account_number)
                         REFERENCES bb_bank_accounts (account_number) ON DELETE RESTRICT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """);
 
-            // Le lien salarie/entreprise et les salaires ne sont plus geres par bb_economy : une entreprise est
-            // un groupe LuckPerms, un salarie en est membre, le patron paie a la main (voir org.bb.bb_economy.perms.JobService).
-            // Sur une base creee par une ancienne version, la table bb_jobs existante n'est pas supprimee automatiquement :
-            // elle est juste ignoree. Elle peut etre supprimee a la main quand vous n'en avez plus besoin.
+            // Les salaires ne sont plus geres par bb_economy (le patron paie a la main). Sur une base creee par une
+            // ancienne version, la table bb_jobs existante n'est pas supprimee automatiquement : elle est ignoree.
 
             migrateExistingTables(stmt);
 
@@ -187,6 +192,33 @@ public class DatabaseManager {
         runMigration(stmt, "ALTER TABLE bb_bank_cards MODIFY card_pin VARCHAR(255) NOT NULL");
         // Dernier filet de securite : la base refuse tout solde negatif meme en cas de bug applicatif.
         runMigration(stmt, "ALTER TABLE bb_bank_accounts ADD CONSTRAINT chk_balance_non_negative CHECK (account_balance >= 0)");
+
+        renameLegacyCompaniesTable(stmt);
+        // Cle etrangere vers la table des entreprises de l'autre mod : echoue (et sera retentee au prochain
+        // demarrage) tant que cette table n'existe pas, ou si elle est deja posee.
+        runMigration(stmt, "ALTER TABLE bb_company_accounts ADD CONSTRAINT fk_company_account_company "
+                + "FOREIGN KEY (company_id) REFERENCES bb_companies (id) ON DELETE RESTRICT");
+    }
+
+    /**
+     * Les anciennes versions de ce mod creaient leur propre bb_companies (company_id texte + account_number).
+     * Ce nom appartient desormais a l'autre mod : tant que l'ancienne table est la, son CREATE TABLE IF NOT
+     * EXISTS serait ignore. On la renomme (sans rien supprimer) pour liberer le nom ; ses donnees sont a
+     * reporter a la main dans bb_company_accounts.
+     */
+    private static void renameLegacyCompaniesTable(Statement stmt) {
+        try (ResultSet rs = stmt.executeQuery(
+                "SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() "
+                        + "AND table_name = 'bb_companies' AND column_name = 'company_id'")) {
+            if (rs.next() && rs.getInt(1) > 0) {
+                stmt.execute("RENAME TABLE bb_companies TO bb_companies_legacy");
+                LOGGER.warn("Ancienne table bb_companies renommee en bb_companies_legacy (le nom est reserve a l'autre mod). "
+                        + "Reportez ses lignes (company_id -> account_number) dans bb_company_accounts avec l'id de la "
+                        + "nouvelle entreprise.");
+            }
+        } catch (SQLException e) {
+            LOGGER.warn("Verification de l'ancienne table bb_companies impossible : {}", e.getMessage());
+        }
     }
 
     private static void runMigration(Statement stmt, String sql) {

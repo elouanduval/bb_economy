@@ -62,8 +62,8 @@ class BankLedgerTest {
                         account_target VARCHAR(20) NULL
                     )""");
             stmt.execute("""
-                    CREATE TABLE bb_companies (
-                        company_id VARCHAR(20) NOT NULL PRIMARY KEY,
+                    CREATE TABLE bb_company_accounts (
+                        company_id INT NOT NULL PRIMARY KEY,
                         account_number VARCHAR(20) NOT NULL
                     )""");
         }
@@ -305,7 +305,7 @@ class BankLedgerTest {
     void createCompanyAccountLinksItToTheGivenIdWithoutACard() throws SQLException {
         int owner = newProfile();
 
-        var created = ledger.createCompanyAccount("BOULANGERIE", owner, bd("50"));
+        var created = ledger.createCompanyAccount(1, owner, bd("50"));
 
         assertTrue(created.isPresent());
         assertTrue(created.get().startsWith("ACC-"));
@@ -326,8 +326,21 @@ class BankLedgerTest {
     void createCompanyAccountTwiceForSameIdIsRefused() throws SQLException {
         int owner = newProfile();
 
-        assertTrue(ledger.createCompanyAccount("BOULANGERIE", owner, bd("0")).isPresent());
-        assertTrue(ledger.createCompanyAccount("BOULANGERIE", owner, bd("0")).isEmpty());
+        assertTrue(ledger.createCompanyAccount(1, owner, bd("0")).isPresent());
+        assertTrue(ledger.createCompanyAccount(1, owner, bd("0")).isEmpty());
+    }
+
+    @Test
+    void companyAccountIsFoundByCompanyIdAndDifferentCompaniesGetDifferentAccounts() throws SQLException {
+        int owner = newProfile();
+
+        String first = ledger.createCompanyAccount(1, owner, bd("0")).orElseThrow();
+        String second = ledger.createCompanyAccount(2, owner, bd("0")).orElseThrow();
+
+        assertNotEquals(first, second);
+        assertEquals(first, ledger.findCompanyAccountNumber(1).orElseThrow());
+        assertEquals(second, ledger.findCompanyAccountNumber(2).orElseThrow());
+        assertTrue(ledger.findCompanyAccountNumber(3).isEmpty());
     }
 
     // --- cartes et operations par numero de compte ----------------------------
@@ -335,7 +348,7 @@ class BankLedgerTest {
     @Test
     void issuedCardResolvesToItsAccountAndSharesItWithOtherCards() throws SQLException {
         int owner = newProfile();
-        String companyAccount = ledger.createCompanyAccount("BOULANGERIE", owner, bd("100")).orElseThrow();
+        String companyAccount = ledger.createCompanyAccount(1, owner, bd("100")).orElseThrow();
 
         String bossCard = ledger.issueCard(companyAccount, "hash1").orElseThrow();
         String managerCard = ledger.issueCard(companyAccount, "hash2").orElseThrow();
@@ -354,7 +367,7 @@ class BankLedgerTest {
     @Test
     void depositWithdrawAndTransferWorkDirectlyOnAnAccountNumber() throws SQLException {
         int owner = newProfile();
-        String company = ledger.createCompanyAccount("BOULANGERIE", owner, bd("0")).orElseThrow();
+        String company = ledger.createCompanyAccount(1, owner, bd("0")).orElseThrow();
         int player = profileWithBalance("0");
         String personal = accountOf(player);
 

@@ -26,6 +26,8 @@ import org.bb.bb_economy.gui.TpeScreenHandler;
 import org.bb.bb_economy.item.TpeItem;
 import org.jetbrains.annotations.Nullable;
 
+import java.util.OptionalInt;
+
 public class TpeBlock extends BaseEntityBlock {
 
     public static final DirectionProperty FACING = HorizontalDirectionalBlock.FACING;
@@ -75,31 +77,43 @@ public class TpeBlock extends BaseEntityBlock {
                 return InteractionResult.SUCCESS;
             }
 
-            if (tpeBlockEntity.getCompanyId().isBlank()) {
+            OptionalInt companyId = BankManager.parseCompanyId(tpeBlockEntity.getCompanyId());
+            if (companyId.isEmpty()) {
                 player.displayClientMessage(Component.literal("Ce TPE n'est lie a aucune entreprise."), true);
                 return InteractionResult.SUCCESS;
             }
+            if (!(player instanceof ServerPlayer serverPlayer)) {
+                return InteractionResult.SUCCESS;
+            }
 
-            if (!BankManager.playerWorksForCompany(player, tpeBlockEntity.getCompanyId())) {
-                if (!(player instanceof ServerPlayer serverPlayer)) {
-                    return InteractionResult.SUCCESS;
+            // Lu sur le thread principal, avant le premier appel base.
+            BankManager.HandCards cards = BankManager.cardsInHand(player);
+
+            // L'appartenance a l'entreprise est lue en base (tables de l'autre mod), donc hors du thread principal.
+            BankManager.worksForCompany(serverPlayer, companyId.getAsInt(), works -> {
+                // Le bloc a pu etre casse ou remplace pendant l'appel base.
+                if (level.getBlockEntity(pos) != tpeBlockEntity) {
+                    return;
                 }
-                BankManager.HandCards cards = BankManager.cardsInHand(player);
+                if (works) {
+                    TpeScreenHandler.open(player, pos, tpeBlockEntity, TpeScreenHandler.AccessMode.SELLER);
+                    return;
+                }
                 if (cards.isEmpty()) {
                     player.displayClientMessage(Component.literal("Vous devez cliquer avec votre carte bancaire en main pour utiliser ce TPE."), true);
-                    return InteractionResult.SUCCESS;
+                    return;
                 }
                 BankManager.ownsAnyOf(serverPlayer, cards, owned -> {
                     if (!owned) {
                         player.displayClientMessage(Component.literal("Vous devez cliquer avec votre carte bancaire en main pour utiliser ce TPE."), true);
                         return;
                     }
+                    if (level.getBlockEntity(pos) != tpeBlockEntity) {
+                        return;
+                    }
                     TpeScreenHandler.open(player, pos, tpeBlockEntity, TpeScreenHandler.AccessMode.BUYER);
                 });
-                return InteractionResult.SUCCESS;
-            }
-
-            TpeScreenHandler.open(player, pos, tpeBlockEntity, TpeScreenHandler.AccessMode.SELLER);
+            });
         }
         return InteractionResult.SUCCESS;
     }

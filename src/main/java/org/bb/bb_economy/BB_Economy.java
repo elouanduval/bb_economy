@@ -32,7 +32,6 @@ import org.bb.bb_economy.init.ModMenus;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.item.TpeItem;
 import org.bb.bb_economy.network.OpenPinSetupPacket;
-import org.bb.bb_economy.perms.JobService;
 
 import org.slf4j.Logger;
 
@@ -70,22 +69,21 @@ public class BB_Economy {
                 "/bb_economy bank create <joueur> - Cree un compte bancaire et une carte pour le joueur",
                 "/bb_economy bank reissue_card <joueur> - Redonne au joueur sa carte bancaire en reinitialisant le PIN",
                 "/bb_economy card regive <joueur> - Redonne au joueur sa carte bancaire liee a son compte",
-                "/bb_economy company create <company_id> <joueur> - Cree le compte bancaire d'une entreprise, rattache a un joueur. "
-                        + "Creez ensuite un groupe LuckPerms de meme nom (insensible a la casse) et ajoutez-y les salaries.",
-                "/bb_economy company give_card <company_id> <joueur> - Emet une nouvelle carte (PIN par defaut) liee au compte "
+                "/bb_economy company open_account <entreprise> - Ouvre le compte bancaire d'une entreprise deja creee (nom entre guillemets s'il contient des espaces), rattache a son patron. "
+                        + "Les membres et les rangs sont geres par le mod des entreprises.",
+                "/bb_economy company give_card <entreprise> <joueur> - Emet une nouvelle carte (PIN par defaut) liee au compte "
                         + "de l'entreprise et la donne au joueur. Plusieurs cartes peuvent coexister pour la meme entreprise.",
                 "/give <joueur> bb_economy:card - Donne une carte bancaire item",
                 "/give <joueur> bb_economy:money <quantite> - Donne des billets",
                 "/give <joueur> bb_economy:wallet - Donne un portefeuille",
                 "/give <joueur> bb_economy:atm - Donne un distributeur ATM",
-                "/bb_economy give tpe <company_id> [joueur] - Donne un TPE lie a une entreprise"
+                "/bb_economy give tpe <entreprise> [joueur] - Donne un TPE lie a une entreprise"
         );
 
         @SubscribeEvent
         public void onServerStarting(ServerStartingEvent event) {
             DatabaseManager.init();
             LOGGER.info("BDD initialisee.");
-            JobService.init();
         }
 
         @SubscribeEvent
@@ -151,34 +149,32 @@ public class BB_Economy {
                                                     EntityArgument.getPlayer(ctx, "player")
                                             )))))
                     .then(Commands.literal("company")
-                            .then(Commands.literal("create")
-                                    .then(Commands.argument("company_id", StringArgumentType.word())
-                                            .then(Commands.argument("owner", EntityArgument.player())
-                                                    .executes(ctx -> createCompany(
-                                                            ctx.getSource(),
-                                                            StringArgumentType.getString(ctx, "company_id"),
-                                                            EntityArgument.getPlayer(ctx, "owner")
-                                                    )))))
+                            .then(Commands.literal("open_account")
+                                    .then(Commands.argument("company", StringArgumentType.string())
+                                            .executes(ctx -> openCompanyAccount(
+                                                    ctx.getSource(),
+                                                    StringArgumentType.getString(ctx, "company")
+                                            ))))
                             .then(Commands.literal("give_card")
-                                    .then(Commands.argument("company_id", StringArgumentType.word())
+                                    .then(Commands.argument("company", StringArgumentType.string())
                                             .then(Commands.argument("player", EntityArgument.player())
                                                     .executes(ctx -> giveCompanyCard(
                                                             ctx.getSource(),
-                                                            StringArgumentType.getString(ctx, "company_id"),
+                                                            StringArgumentType.getString(ctx, "company"),
                                                             EntityArgument.getPlayer(ctx, "player")
                                                     ))))))
                     .then(Commands.literal("give")
                             .then(Commands.literal("tpe")
-                                    .then(Commands.argument("company_id", StringArgumentType.word())
+                                    .then(Commands.argument("company", StringArgumentType.string())
                                             .executes(ctx -> giveCompanyTpe(
                                                     ctx.getSource(),
-                                                    StringArgumentType.getString(ctx, "company_id"),
+                                                    StringArgumentType.getString(ctx, "company"),
                                                     null
                                             ))
                                             .then(Commands.argument("player", EntityArgument.player())
                                                     .executes(ctx -> giveCompanyTpe(
                                                             ctx.getSource(),
-                                                            StringArgumentType.getString(ctx, "company_id"),
+                                                            StringArgumentType.getString(ctx, "company"),
                                                             EntityArgument.getPlayer(ctx, "player")
                                                     )))))));
         }
@@ -271,47 +267,47 @@ public class BB_Economy {
             return 1;
         }
 
-        private int createCompany(CommandSourceStack source, String rawCompanyId, ServerPlayer owner) {
-            final String companyId;
+        /** Resout une entreprise (table de l'autre mod) d'apres son nom, ou signale l'echec a la source. */
+        private static Integer resolveCompany(CommandSourceStack source, String name) {
             try {
-                companyId = BankManager.normalizeCompanyId(rawCompanyId);
-            } catch (IllegalArgumentException e) {
-                source.sendFailure(Component.literal("Identifiant d'entreprise invalide."));
+                Integer id = BankManager.findCompanyIdByName(name).orElse(null);
+                if (id == null) {
+                    source.sendFailure(Component.literal("Entreprise introuvable : " + name));
+                }
+                return id;
+            } catch (RuntimeException e) {
+                source.sendFailure(Component.literal("Lecture des entreprises impossible : " + e.getMessage()));
+                return null;
+            }
+        }
+
+        private int openCompanyAccount(CommandSourceStack source, String companyName) {
+            Integer companyId = resolveCompany(source, companyName);
+            if (companyId == null) {
                 return 0;
             }
 
             final String accountNumber;
             try {
-                accountNumber = BankManager.createCompanyAccount(companyId, owner);
-            } catch (IllegalStateException e) {
-                source.sendFailure(Component.literal("Cette entreprise existe deja : " + companyId));
+                accountNumber = BankManager.openCompanyAccount(companyId);
+            } catch (IllegalStateException | IllegalArgumentException e) {
+                source.sendFailure(Component.literal(e.getMessage()));
                 return 0;
             } catch (RuntimeException e) {
-                source.sendFailure(Component.literal("Creation de l'entreprise impossible : " + e.getMessage()));
+                source.sendFailure(Component.literal("Ouverture du compte impossible : " + e.getMessage()));
                 return 0;
             }
 
-            String luckPermsGroup = companyId.toLowerCase(java.util.Locale.ROOT);
             source.sendSuccess(
-                    () -> Component.literal("Entreprise " + companyId + " creee (compte " + accountNumber + "), rattachee a "
-                            + owner.getName().getString() + ". Creez le groupe LuckPerms \"" + luckPermsGroup
-                            + "\" et ajoutez-y les salaries."),
+                    () -> Component.literal("Compte " + accountNumber + " ouvert pour l'entreprise " + companyName + "."),
                     true
             );
             return 1;
         }
 
-        private int giveCompanyCard(CommandSourceStack source, String rawCompanyId, ServerPlayer target) {
-            final String companyId;
-            try {
-                companyId = BankManager.normalizeCompanyId(rawCompanyId);
-            } catch (IllegalArgumentException e) {
-                source.sendFailure(Component.literal("Identifiant d'entreprise invalide."));
-                return 0;
-            }
-
-            if (!BankManager.companyExists(companyId)) {
-                source.sendFailure(Component.literal("Entreprise introuvable : " + companyId));
+        private int giveCompanyCard(CommandSourceStack source, String companyName, ServerPlayer target) {
+            Integer companyId = resolveCompany(source, companyName);
+            if (companyId == null) {
                 return 0;
             }
 
@@ -324,33 +320,36 @@ public class BB_Economy {
             }
 
             source.sendSuccess(
-                    () -> Component.literal("Carte " + cardNumber + " de l'entreprise " + companyId + " donnee a "
+                    () -> Component.literal("Carte " + cardNumber + " de l'entreprise " + companyName + " donnee a "
                             + target.getName().getString() + "."),
                     true
             );
             target.displayClientMessage(
-                    Component.literal("Vous avez recu une carte bancaire (" + cardNumber + ") de l'entreprise " + companyId
+                    Component.literal("Vous avez recu une carte bancaire (" + cardNumber + ") de l'entreprise " + companyName
                             + ". Changez son PIN par defaut depuis l'ATM."),
                     false
             );
             return 1;
         }
 
-        private int giveCompanyTpe(CommandSourceStack source, String rawCompanyId, ServerPlayer explicitTarget) {
-            final String companyId;
+        private int giveCompanyTpe(CommandSourceStack source, String companyName, ServerPlayer explicitTarget) {
+            Integer companyId = resolveCompany(source, companyName);
+            if (companyId == null) {
+                return 0;
+            }
+
+            final String companyAccount;
             try {
-                companyId = BankManager.normalizeCompanyId(rawCompanyId);
-            } catch (IllegalArgumentException e) {
-                source.sendFailure(Component.literal("Identifiant d'entreprise invalide."));
+                companyAccount = BankManager.findCompanyAccountNumber(companyId).orElse(null);
+            } catch (RuntimeException e) {
+                source.sendFailure(Component.literal("Lecture du compte impossible : " + e.getMessage()));
                 return 0;
             }
-
-            if (!BankManager.companyExists(companyId)) {
-                source.sendFailure(Component.literal("Entreprise introuvable : " + companyId));
+            if (companyAccount == null) {
+                source.sendFailure(Component.literal("Cette entreprise n'a pas de compte bancaire : "
+                        + "ouvrez-le d'abord avec /bb_economy company open_account."));
                 return 0;
             }
-
-            String companyAccount = BankManager.getCompanyAccountNumber(companyId);
 
             ServerPlayer target = explicitTarget;
             if (target == null) {
@@ -362,8 +361,9 @@ public class BB_Economy {
                 }
             }
 
+            // Le TPE memorise l'id numerique de l'entreprise (le nom peut changer) et son compte, pour affichage.
             ItemStack stack = new ItemStack(ModBlocks.TPE_BLOCK_ITEM.get());
-            TpeItem.setCompanyData(stack, companyId, companyAccount);
+            TpeItem.setCompanyData(stack, String.valueOf(companyId), companyAccount);
 
             boolean added = target.getInventory().add(stack);
             if (!added) {
@@ -372,11 +372,11 @@ public class BB_Economy {
 
             ServerPlayer finalTarget = target;
             source.sendSuccess(
-                    () -> Component.literal("TPE lie a " + companyId + " donne a " + finalTarget.getName().getString() + "."),
+                    () -> Component.literal("TPE lie a " + companyName + " donne a " + finalTarget.getName().getString() + "."),
                     true
             );
             target.displayClientMessage(
-                    Component.literal("Vous avez recu un TPE lie a l'entreprise " + companyId + "."),
+                    Component.literal("Vous avez recu un TPE lie a l'entreprise " + companyName + "."),
                     false
             );
             return 1;
