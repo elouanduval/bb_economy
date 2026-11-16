@@ -7,6 +7,7 @@ import net.minecraftforge.fml.event.lifecycle.FMLClientSetupEvent;
 import net.minecraftforge.fml.javafmlmod.FMLJavaModLoadingContext;
 import org.bb.bb_economy.BB_Economy;
 import org.bb.bb_economy.gui.AtmScreen;
+import org.bb.bb_economy.gui.ShopScreen;
 import org.bb.bb_economy.gui.TpeScreen;
 import org.bb.bb_economy.init.ModMenus;
 
@@ -20,5 +21,6 @@ public class ClientSetup {
     private static void clientSetup(FMLClientSetupEvent event) {
         MenuScreens.register(ModMenus.ATM_MENU.get(), AtmScreen::new);
         MenuScreens.register(ModMenus.TPE_MENU.get(), TpeScreen::new);
+        MenuScreens.register(ModMenus.SHOP_MENU.get(), ShopScreen::new);
     }
 }

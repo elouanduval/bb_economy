@@ -101,7 +101,7 @@ public class TpeSetAmountPacket {
             player.level().sendBlockUpdated(packet.pos, tpe.getBlockState(), tpe.getBlockState(), 3);
 
             String shown = amount.stripTrailingZeros().toPlainString();
-            sendResponse(player, true, "Montant enregistre. Le client pourra payer " + shown + " EUR.", amount.toPlainString());
+            sendResponse(player, true, "Montant enregistre. Le client pourra payer " + shown + " " + Money.CURRENCY + ".", amount.toPlainString());
         });
     }
 

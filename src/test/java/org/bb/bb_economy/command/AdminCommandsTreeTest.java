@@ -47,7 +47,18 @@ class AdminCommandsTreeTest {
                 "bb_economy company unfreeze <company>",
                 "bb_economy card regive <player>",
                 "bb_economy give tpe <company>",
-                "bb_economy give tpe <company> <player>"
+                "bb_economy give tpe <company> <player>",
+                "bb_economy give shop <company>",
+                "bb_economy give shop <company> <player>",
+                "bb_economy shop list <profession>",
+                "bb_economy shop set <profession> <direction> <quantity> <price>",
+                "bb_economy shop set <profession> <direction> <quantity> <price> <item>",
+                "bb_economy shop remove <profession> <direction>",
+                "bb_economy shop remove <profession> <direction> <item>",
+                "bb_economy shop enable <profession> <direction>",
+                "bb_economy shop enable <profession> <direction> <item>",
+                "bb_economy shop disable <profession> <direction>",
+                "bb_economy shop disable <profession> <direction> <item>"
         ));
 
         assertEquals(expected, usages);

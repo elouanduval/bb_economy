@@ -9,16 +9,23 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
+import net.minecraft.commands.arguments.ResourceLocationArgument;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.database.BankLedger;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.database.Money;
+import org.bb.bb_economy.database.ShopCatalog;
+import org.bb.bb_economy.database.ShopManager;
 import org.bb.bb_economy.database.TxResult;
 import org.bb.bb_economy.init.ModBlocks;
 import org.bb.bb_economy.init.ModNetworking;
+import org.bb.bb_economy.item.ShopItem;
+import org.bb.bb_economy.item.ShopItems;
 import org.bb.bb_economy.item.TpeItem;
 import org.bb.bb_economy.network.OpenPinSetupPacket;
 
@@ -64,6 +71,12 @@ public final class AdminCommands {
             "/bb_economy company freeze <entreprise> - Gele le compte de l'entreprise",
             "/bb_economy company unfreeze <entreprise> - Degele le compte de l'entreprise",
             "/bb_economy give tpe <entreprise> [joueur] - Donne un TPE lie a une entreprise",
+            "--- Boutiques automatiques (sans vendeur : offres du metier, compte de l'entreprise liee) ---",
+            "/bb_economy give shop <entreprise> [joueur] - Donne un bloc boutique lie a une entreprise",
+            "/bb_economy shop list <metier> - Offres du metier (sell = le joueur vend, buy = le joueur achete)",
+            "/bb_economy shop set <metier> <sell|buy> <quantite> <prix> [objet] - Offre : <quantite> objets pour <prix> (objet en main si omis)",
+            "/bb_economy shop remove <metier> <sell|buy> [objet] - Supprime l'offre (objet en main si omis)",
+            "/bb_economy shop enable|disable <metier> <sell|buy> [objet] - Active ou desactive l'offre (objet en main si omis)",
             "--- Objets ---",
             "/give <joueur> bb_economy:money <quantite> - Donne des billets",
             "/give <joueur> bb_economy:wallet - Donne un portefeuille",
@@ -113,6 +126,7 @@ public final class AdminCommands {
                 .then(Commands.literal("card")
                         .then(Commands.literal("regive").then(playerArg().executes(ctx ->
                                 regivePlayerCard(ctx.getSource(), EntityArgument.getPlayer(ctx, "player"))))))
+                .then(shopCommands())
                 .then(Commands.literal("give")
                         .then(Commands.literal("tpe")
                                 .then(companyArg()
@@ -120,7 +134,51 @@ public final class AdminCommands {
                                                 StringArgumentType.getString(ctx, "company"), null))
                                         .then(playerArg().executes(ctx -> giveCompanyTpe(ctx.getSource(),
                                                 StringArgumentType.getString(ctx, "company"),
+                                                EntityArgument.getPlayer(ctx, "player"))))))
+                        .then(Commands.literal("shop")
+                                .then(companyArg()
+                                        .executes(ctx -> giveCompanyShop(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "company"), null))
+                                        .then(playerArg().executes(ctx -> giveCompanyShop(ctx.getSource(),
+                                                StringArgumentType.getString(ctx, "company"),
                                                 EntityArgument.getPlayer(ctx, "player"))))))));
+    }
+
+    /** /bb_economy shop ... : gestion des offres des boutiques automatiques (table bb_shop_offers). */
+    private static LiteralArgumentBuilder<CommandSourceStack> shopCommands() {
+        return Commands.literal("shop")
+                .then(Commands.literal("list").then(professionArg().executes(ctx ->
+                        shopList(ctx.getSource(), StringArgumentType.getString(ctx, "profession")))))
+                .then(Commands.literal("set").then(professionArg().then(directionArg()
+                        .then(Commands.argument("quantity", IntegerArgumentType.integer(1, ShopCatalog.MAX_BUNDLE_SIZE))
+                                .then(Commands.argument("price", StringArgumentType.word())
+                                        .executes(ctx -> shopSet(ctx, false))
+                                        .then(itemArg().executes(ctx -> shopSet(ctx, true))))))))
+                .then(shopChangeCommand("remove", ShopChange.REMOVE))
+                .then(shopChangeCommand("enable", ShopChange.ENABLE))
+                .then(shopChangeCommand("disable", ShopChange.DISABLE));
+    }
+
+    /** remove / enable / disable : l'objet est celui en main, ou celui donne en dernier argument. */
+    private static LiteralArgumentBuilder<CommandSourceStack> shopChangeCommand(String name, ShopChange change) {
+        return Commands.literal(name).then(professionArg().then(directionArg()
+                .executes(ctx -> shopChange(ctx, change, false))
+                .then(itemArg().executes(ctx -> shopChange(ctx, change, true)))));
+    }
+
+    /** Identifiant d'objet, complete par la liste des objets du jeu (y compris ceux des mods). */
+    private static RequiredArgumentBuilder<CommandSourceStack, ?> itemArg() {
+        return Commands.argument("item", ResourceLocationArgument.id())
+                .suggests((ctx, builder) -> SharedSuggestionProvider.suggestResource(BuiltInRegistries.ITEM.keySet(), builder));
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, ?> professionArg() {
+        return Commands.argument("profession", StringArgumentType.word());
+    }
+
+    private static RequiredArgumentBuilder<CommandSourceStack, ?> directionArg() {
+        return Commands.argument("direction", StringArgumentType.word())
+                .suggests((ctx, builder) -> SharedSuggestionProvider.suggest(List.of("sell", "buy"), builder));
     }
 
     private static RequiredArgumentBuilder<CommandSourceStack, ?> playerArg() {
@@ -229,7 +287,7 @@ public final class AdminCommands {
         }
         source.sendSuccess(() -> Component.literal("Compte de " + target.label() + " : " + info.accountNumber()), false);
         source.sendSuccess(() -> Component.literal(" - Type : " + info.type()), false);
-        source.sendSuccess(() -> Component.literal(" - Solde : " + info.balance().toPlainString() + " EUR"), false);
+        source.sendSuccess(() -> Component.literal(" - Solde : " + info.balance().toPlainString() + " " + Money.CURRENCY), false);
         source.sendSuccess(() -> Component.literal(" - Etat : " + (info.frozen() ? "GELE" : "actif")), false);
         List<String> cards = BankManager.cardNumbersOf(info.accountNumber());
         if (!cards.isEmpty()) {
@@ -258,8 +316,8 @@ public final class AdminCommands {
             }
             String balance = BankManager.accountInfo(target.accountNumber())
                     .map(info -> info.balance().toPlainString()).orElse("?");
-            src.sendSuccess(() -> Component.literal(amount.toPlainString() + " EUR " + (credit ? "credites sur" : "debites de")
-                    + " le compte de " + target.label() + ". Nouveau solde : " + balance + " EUR."), true);
+            src.sendSuccess(() -> Component.literal(amount.toPlainString() + " " + Money.CURRENCY + " " + (credit ? "credites sur" : "debites de")
+                    + " le compte de " + target.label() + ". Nouveau solde : " + balance + " " + Money.CURRENCY + "."), true);
             return 1;
         });
     }
@@ -274,7 +332,7 @@ public final class AdminCommands {
                 + " (" + target.accountNumber() + ") :"), false);
         for (BankLedger.TxRecord record : records) {
             String date = record.date() == null ? "?" : record.date().format(DATE_FORMAT);
-            String line = " [" + date + "] " + record.type() + " " + record.amount().toPlainString() + " EUR : "
+            String line = " [" + date + "] " + record.type() + " " + record.amount().toPlainString() + " " + Money.CURRENCY + " : "
                     + describeEnd(record.origin(), target.accountNumber(), "especes / creation") + " -> "
                     + describeEnd(record.target(), target.accountNumber(), "especes");
             source.sendSuccess(() -> Component.literal(line), false);
@@ -448,6 +506,191 @@ public final class AdminCommands {
                 true
         );
         return opened;
+    }
+
+    // -------------------------------------------------------------------------
+    // Boutiques automatiques
+    // -------------------------------------------------------------------------
+
+    private enum ShopChange { REMOVE, ENABLE, DISABLE }
+
+    /** Sens d'une offre, du point de vue du joueur : sell = il vend a la boutique, buy = il lui achete. */
+    private static ShopCatalog.Direction parseDirection(CommandSourceStack source, String raw) {
+        Optional<ShopCatalog.Direction> direction = ShopCatalog.Direction.fromColumn(raw);
+        if (direction.isEmpty()) {
+            source.sendFailure(Component.literal("Sens invalide : " + raw
+                    + " (sell = le joueur vend a la boutique, buy = le joueur lui achete)."));
+        }
+        return direction.orElse(null);
+    }
+
+    /** Verifie que le metier existe (table du plugin des entreprises) ; retourne son code normalise ou null. */
+    private static String requireProfession(CommandSourceStack source, String raw) {
+        String code = raw.trim().toUpperCase();
+        try {
+            if (!ShopManager.catalog().professionExists(code)) {
+                source.sendFailure(Component.literal("Metier introuvable : " + code
+                        + " (le code est celui de la table bb_professions, ex. SCIERIE)."));
+                return null;
+            }
+        } catch (RuntimeException e) {
+            source.sendFailure(Component.literal("Lecture des metiers impossible : " + e.getMessage()));
+            return null;
+        }
+        return code;
+    }
+
+    private static int shopList(CommandSourceStack source, String rawProfession) {
+        String profession = requireProfession(source, rawProfession);
+        if (profession == null) {
+            return 0;
+        }
+        List<ShopCatalog.Offer> offers;
+        try {
+            offers = ShopManager.catalog().offersOfProfession(profession);
+        } catch (RuntimeException e) {
+            source.sendFailure(Component.literal("Lecture des offres impossible : " + e.getMessage()));
+            return 0;
+        }
+        if (offers.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("Aucune offre pour " + profession + "."), false);
+            return 1;
+        }
+        source.sendSuccess(() -> Component.literal("Offres de " + profession + " (sell = le joueur vend, buy = le joueur achete) :"), false);
+        for (ShopCatalog.Offer offer : offers) {
+            String line = " " + offer.direction().column() + " " + offer.itemKey() + " : " + offer.bundleSize()
+                    + " pour " + offer.bundlePrice().toPlainString() + " " + Money.CURRENCY + (offer.active() ? "" : " (DESACTIVEE)");
+            source.sendSuccess(() -> Component.literal(line), false);
+        }
+        return offers.size();
+    }
+
+    private static int shopSet(CommandContext<CommandSourceStack> ctx, boolean itemGiven) throws CommandSyntaxException {
+        CommandSourceStack source = ctx.getSource();
+        ShopCatalog.Direction direction = parseDirection(source, StringArgumentType.getString(ctx, "direction"));
+        BigDecimal price = Money.parsePositive(StringArgumentType.getString(ctx, "price")).orElse(null);
+        int quantity = IntegerArgumentType.getInteger(ctx, "quantity");
+        if (direction == null) {
+            return 0;
+        }
+        if (price == null) {
+            source.sendFailure(Component.literal("Prix invalide (superieur a 0, 2 decimales maximum)."));
+            return 0;
+        }
+        String profession = requireProfession(source, StringArgumentType.getString(ctx, "profession"));
+        String itemKey = offerItemKey(ctx, itemGiven);
+        if (profession == null || itemKey == null) {
+            return 0;
+        }
+        try {
+            boolean updated = ShopManager.catalog().upsertOffer(profession, itemKey, direction, quantity, price);
+            source.sendSuccess(() -> Component.literal((updated ? "Offre mise a jour : " : "Offre creee : ") + profession + " "
+                    + direction.column() + " " + quantity + " x " + itemKey + " pour " + price.toPlainString() + " " + Money.CURRENCY + "."), true);
+            return 1;
+        } catch (RuntimeException e) {
+            source.sendFailure(Component.literal("Ecriture de l'offre impossible : " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    private static int shopChange(CommandContext<CommandSourceStack> ctx, ShopChange change, boolean itemGiven)
+            throws CommandSyntaxException {
+        CommandSourceStack source = ctx.getSource();
+        ShopCatalog.Direction direction = parseDirection(source, StringArgumentType.getString(ctx, "direction"));
+        if (direction == null) {
+            return 0;
+        }
+        String profession = requireProfession(source, StringArgumentType.getString(ctx, "profession"));
+        String itemKey = offerItemKey(ctx, itemGiven);
+        if (profession == null || itemKey == null) {
+            return 0;
+        }
+        try {
+            ShopCatalog catalog = ShopManager.catalog();
+            boolean found = switch (change) {
+                case REMOVE -> catalog.removeOffer(profession, itemKey, direction);
+                case ENABLE -> catalog.setActive(profession, itemKey, direction, true);
+                case DISABLE -> catalog.setActive(profession, itemKey, direction, false);
+            };
+            if (!found) {
+                source.sendFailure(Component.literal("Aucune offre " + direction.column() + " pour " + itemKey + " chez " + profession + "."));
+                return 0;
+            }
+            String done = switch (change) {
+                case REMOVE -> "supprimee";
+                case ENABLE -> "activee";
+                case DISABLE -> "desactivee";
+            };
+            source.sendSuccess(() -> Component.literal("Offre " + done + " : " + profession + " " + direction.column() + " " + itemKey + "."), true);
+            return 1;
+        } catch (RuntimeException e) {
+            source.sendFailure(Component.literal("Modification de l'offre impossible : " + e.getMessage()));
+            return 0;
+        }
+    }
+
+    /**
+     * Objet d'une offre : celui donne en argument (verifie contre le registre du jeu), sinon celui tenu en main.
+     * Retourne null apres avoir signale l'echec.
+     */
+    private static String offerItemKey(CommandContext<CommandSourceStack> ctx, boolean itemGiven) throws CommandSyntaxException {
+        if (!itemGiven) {
+            return heldItemKey(ctx.getSource());
+        }
+        String key = ResourceLocationArgument.getId(ctx, "item").toString();
+        if (ShopItems.itemOf(key).isEmpty()) {
+            ctx.getSource().sendFailure(Component.literal("Objet inconnu : " + key));
+            return null;
+        }
+        return key;
+    }
+
+    /** Identifiant de l'objet tenu en main par l'administrateur, ou null apres avoir signale l'echec. */
+    private static String heldItemKey(CommandSourceStack source) throws CommandSyntaxException {
+        ServerPlayer admin = source.getPlayerOrException();
+        Optional<String> key = ShopItems.keyOf(admin.getMainHandItem());
+        if (key.isEmpty()) {
+            source.sendFailure(Component.literal("Tenez en main l'objet de l'offre."));
+            return null;
+        }
+        return key.get();
+    }
+
+    private static int giveCompanyShop(CommandSourceStack source, String companyName, ServerPlayer explicitTarget) {
+        Integer companyId = resolveCompany(source, companyName);
+        if (companyId == null) {
+            return 0;
+        }
+        try {
+            BankManager.ensureCompanyAccount(companyId);
+        } catch (RuntimeException e) {
+            source.sendFailure(Component.literal("Ouverture du compte de l'entreprise impossible : " + e.getMessage()));
+            return 0;
+        }
+
+        ServerPlayer target = explicitTarget;
+        if (target == null) {
+            try {
+                target = source.getPlayerOrException();
+            } catch (Exception e) {
+                source.sendFailure(Component.literal("Precisez un joueur cible depuis la console."));
+                return 0;
+            }
+        }
+
+        ItemStack stack = new ItemStack(ModBlocks.SHOP_BLOCK_ITEM.get());
+        ShopItem.setCompanyId(stack, String.valueOf(companyId));
+        if (!target.getInventory().add(stack)) {
+            target.drop(stack, false);
+        }
+
+        ServerPlayer finalTarget = target;
+        source.sendSuccess(
+                () -> Component.literal("Boutique automatique de " + companyName + " donnee a " + finalTarget.getName().getString()
+                        + ". Elle propose les offres du metier de l'entreprise."),
+                true
+        );
+        return 1;
     }
 
     private static int giveCompanyTpe(CommandSourceStack source, String companyName, ServerPlayer explicitTarget) {

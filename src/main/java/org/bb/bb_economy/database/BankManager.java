@@ -33,7 +33,7 @@ import java.util.function.Consumer;
 public final class BankManager {
 
     private static final Logger LOGGER = LogUtils.getLogger();
-    private static final BankLedger LEDGER = new BankLedger(DatabaseManager::getConnection);
+    static final BankLedger LEDGER = new BankLedger(DatabaseManager::getConnection);
     private static final PinAttemptTracker PIN_ATTEMPTS = new PinAttemptTracker();
 
     private BankManager() {
@@ -930,7 +930,7 @@ public final class BankManager {
         }, player.getServer());
     }
 
-    private static TxResult logAndConvert(Throwable error, Player player, String action) {
+    static TxResult logAndConvert(Throwable error, Player player, String action) {
         LOGGER.error("Erreur pendant un {} pour {}", action, player.getName().getString(), error);
         return TxResult.SERVICE_UNAVAILABLE;
     }
@@ -940,7 +940,7 @@ public final class BankManager {
      * inventaire ou de lui envoyer un paquet depuis une continuation async : l'argent, lui, est de toute
      * facon deja correctement a jour en base (ou refuse), qu'on touche au joueur ensuite ou non.
      */
-    private static boolean isStillOnline(ServerPlayer player) {
+    static boolean isStillOnline(ServerPlayer player) {
         MinecraftServer server = player.getServer();
         return server != null && server.getPlayerList().getPlayer(player.getUUID()) == player;
     }
@@ -1012,7 +1012,7 @@ public final class BankManager {
         }
     }
 
-    private static int countBills(Player player) {
+    static int countBills(Player player) {
         int total = 0;
         for (ItemStack stack : player.getInventory().items) {
             if (stack.getItem() == ModItems.MONEY.get()) total += stack.getCount();
@@ -1020,7 +1020,7 @@ public final class BankManager {
         return total;
     }
 
-    private static void removeBills(Player player, int amount) {
+    static void removeBills(Player player, int amount) {
         int remaining = amount;
         for (ItemStack stack : player.getInventory().items) {
             if (remaining <= 0) break;
@@ -1032,7 +1032,7 @@ public final class BankManager {
         }
     }
 
-    private static void addMoneyStacks(Player player, int amount) {
+    static void addMoneyStacks(Player player, int amount) {
         int remaining = amount;
         int maxStackSize = ModItems.MONEY.get().getDefaultInstance().getMaxStackSize();
         while (remaining > 0) {
@@ -1045,7 +1045,7 @@ public final class BankManager {
         }
     }
 
-    private static void syncInventory(Player player) {
+    static void syncInventory(Player player) {
         player.getInventory().setChanged();
         if (player instanceof ServerPlayer serverPlayer) {
             serverPlayer.containerMenu.broadcastChanges();
@@ -1075,7 +1075,7 @@ public final class BankManager {
     }
 
     /** Jour in-game de l'overworld : identique quelle que soit la dimension ou se trouve le joueur. */
-    private static long currentInGameDay(Player player) {
+    static long currentInGameDay(Player player) {
         MinecraftServer server = player.getServer();
         long dayTime = server != null ? server.overworld().getDayTime() : player.level().getDayTime();
         return dayTime / 24000L;

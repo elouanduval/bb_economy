@@ -6,6 +6,7 @@ import net.minecraftforge.network.NetworkEvent;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.database.CompanyChoice;
 import org.bb.bb_economy.gui.AtmScreenHandler;
+import org.bb.bb_economy.gui.ShopScreenHandler;
 import org.bb.bb_economy.gui.TpeScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
 
@@ -43,7 +44,8 @@ public class PinCheckPacket {
             TpeScreenHandler tpeMenu = player.containerMenu instanceof TpeScreenHandler tpe
                     && tpe.stillValid(player)
                     && tpe.getAccessMode() == TpeScreenHandler.AccessMode.BUYER ? tpe : null;
-            if (atmMenu == null && tpeMenu == null) {
+            ShopScreenHandler shopMenu = player.containerMenu instanceof ShopScreenHandler shop && shop.stillValid(player) ? shop : null;
+            if (atmMenu == null && tpeMenu == null && shopMenu == null) {
                 sendResponse(player, false, 0, "Aucun terminal ouvert.", List.of());
                 return;
             }
@@ -62,7 +64,12 @@ public class PinCheckPacket {
                 });
             } else {
                 BankManager.checkPin(player, packet.getPin(), outcome -> {
-                    tpeMenu.setPinValidated(outcome.check().isOk());
+                    // Au TPE comme a la boutique, l'acheteur paie depuis son compte perso : meme verification.
+                    if (tpeMenu != null) {
+                        tpeMenu.setPinValidated(outcome.check().isOk());
+                    } else {
+                        shopMenu.setPinValidated(outcome.check().isOk());
+                    }
                     sendResponse(player, outcome.check().isOk(), outcome.balance().doubleValue(), outcome.check().message(), List.of());
                 });
             }

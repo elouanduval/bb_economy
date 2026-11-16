@@ -8,6 +8,7 @@ import net.minecraft.client.gui.screens.inventory.MenuAccess;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
+import org.bb.bb_economy.database.Money;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.network.PinCheckPacket;
 import org.bb.bb_economy.network.TpePaymentPacket;
@@ -327,7 +328,7 @@ public class TpeScreen extends Screen implements MenuAccess<TpeScreenHandler> {
     }
 
     private void renderAmountInfo(GuiGraphics graphics) {
-        String amountText = "Montant : " + currentAmount.stripTrailingZeros().toPlainString() + " EUR";
+        String amountText = "Montant : " + currentAmount.stripTrailingZeros().toPlainString() + " " + Money.CURRENCY;
         graphics.drawString(this.font, amountText, this.width / 2 - this.font.width(amountText) / 2, this.height / 2 - 64, 0xB8D8B8, false);
     }
 

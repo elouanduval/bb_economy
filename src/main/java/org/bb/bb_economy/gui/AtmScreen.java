@@ -8,6 +8,7 @@ import net.minecraft.client.gui.screens.inventory.MenuAccess;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
+import org.bb.bb_economy.database.Money;
 import org.bb.bb_economy.database.CompanyChoice;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.network.AtmActionPacket;
@@ -242,7 +243,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             accountLabel = PERSONAL_LABEL;
             // Un patron choisit d'abord son compte ; les autres joueurs arrivent directement sur le menu.
             state = companies.isEmpty() ? AtmState.MAIN_MENU : AtmState.ACCOUNT_SELECT;
-            setMessage(companies.isEmpty() ? "Solde : " + currentBalance + " EUR" : "Choisissez un compte.", 0xFFFFFF);
+            setMessage(companies.isEmpty() ? "Solde : " + currentBalance + " " + Money.CURRENCY : "Choisissez un compte.", 0xFFFFFF);
             rebuildScreen();
         } else {
             setMessage(responseMessage, 0xFF4444);
@@ -290,7 +291,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
                 accountLabel = pendingAccountLabel;
                 currentBalance = BigDecimal.valueOf(balance);
                 state = AtmState.MAIN_MENU;
-                setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
+                setMessage("Solde : " + currentBalance + " " + Money.CURRENCY, 0xFFFFFF);
                 rebuildScreen();
             } else {
                 setMessage(responseMessage, 0xFF4444);
@@ -298,7 +299,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             return;
         }
         currentBalance = BigDecimal.valueOf(balance);
-        String suffix = success ? ". Solde : " + currentBalance + " EUR" : "";
+        String suffix = success ? ". Solde : " + currentBalance + " " + Money.CURRENCY : "";
         setMessage(responseMessage + suffix, success ? 0x44FF44 : 0xFF4444);
     }
 
@@ -346,7 +347,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
 
     private void goToMainMenu() {
         state = AtmState.MAIN_MENU;
-        setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
+        setMessage("Solde : " + currentBalance + " " + Money.CURRENCY, 0xFFFFFF);
         rebuildScreen();
     }
 
@@ -421,7 +422,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
     }
 
     private void renderBalance(GuiGraphics g) {
-        String balance = "Solde : " + currentBalance + " EUR";
+        String balance = "Solde : " + currentBalance + " " + Money.CURRENCY;
         g.drawString(this.font, balance, this.width / 2 - this.font.width(balance) / 2, this.height / 2 - 74, 0xB8D8B8, false);
     }
 

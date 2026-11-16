@@ -11,6 +11,8 @@ public class ClientPacketHandler {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         if (mc.screen instanceof org.bb.bb_economy.gui.AtmScreen atmScreen) {
             atmScreen.onPinResponse(packet.success, packet.balance, packet.message, packet.companies);
+        } else if (mc.screen instanceof org.bb.bb_economy.gui.ShopScreen shopScreen) {
+            shopScreen.onPinResponse(packet.success, packet.message);
         } else if (mc.screen instanceof org.bb.bb_economy.gui.TpeScreen tpeScreen) {
             tpeScreen.onPinResponse(packet.success, packet.message);
         }
@@ -52,6 +54,14 @@ public class ClientPacketHandler {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         if (mc.screen instanceof org.bb.bb_economy.gui.TpeScreen screen) {
             screen.onPaymentResponse(packet.success, packet.message, packet.amount);
+        }
+    }
+
+    @OnlyIn(Dist.CLIENT)
+    public static void handleShopTradeResponse(ShopTradeResponsePacket packet) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc.screen instanceof org.bb.bb_economy.gui.ShopScreen screen) {
+            screen.onTradeResponse(packet.success, packet.message);
         }
     }
 }

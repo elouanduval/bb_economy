@@ -10,6 +10,9 @@ import java.util.regex.Pattern;
  */
 public final class Money {
 
+    /** Nom de la monnaie, affiche apres chaque montant. */
+    public static final String CURRENCY = "bb_euros";
+
     /** Plus grand montant representable par les colonnes DECIMAL(10,2). */
     public static final BigDecimal MAX_AMOUNT = new BigDecimal("99999999.99");
 

@@ -12,6 +12,7 @@ public enum TxResult {
     BALANCE_OVERFLOW("Le solde maximal du compte serait depasse."),
     NOT_ENOUGH_CASH("Pas assez de billets."),
     ACCOUNT_FROZEN("Ce compte est gele."),
+    CARD_NOT_IN_HAND("Gardez votre carte bancaire en main pour payer par carte."),
     SERVICE_UNAVAILABLE("Service bancaire indisponible. Reessayez plus tard.");
 
     private final String message;
