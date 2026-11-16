@@ -90,13 +90,15 @@ public class DatabaseManager {
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """);
 
-            // owner est maintenant un INT referençant profiles.id
+            // owner : profil proprietaire d'un compte PERSONNEL (profiles.id). NULL pour un compte d'entreprise, qui peut
+            // exister sans aucun personnel : son rattachement passe par bb_company_accounts.
             stmt.execute("""
                 CREATE TABLE IF NOT EXISTS bb_bank_accounts (
                     account_number  VARCHAR(20)   NOT NULL,
                     account_type    VARCHAR(20)   NOT NULL DEFAULT 'personal',
                     account_balance DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-                    owner           INT           NOT NULL,
+                    owner           INT           NULL,
+                    frozen          BOOLEAN       NOT NULL DEFAULT FALSE,
                     PRIMARY KEY (account_number),
                     INDEX idx_owner (owner),
                     CONSTRAINT fk_account_profile FOREIGN KEY (owner)
@@ -192,6 +194,12 @@ public class DatabaseManager {
         runMigration(stmt, "ALTER TABLE bb_bank_cards MODIFY card_pin VARCHAR(255) NOT NULL");
         // Dernier filet de securite : la base refuse tout solde negatif meme en cas de bug applicatif.
         runMigration(stmt, "ALTER TABLE bb_bank_accounts ADD CONSTRAINT chk_balance_non_negative CHECK (account_balance >= 0)");
+
+        // Un compte d'entreprise n'a pas de proprietaire (owner NULL) : la colonne etait NOT NULL dans les anciennes versions.
+        runMigration(stmt, "ALTER TABLE bb_bank_accounts MODIFY owner INT NULL");
+
+        // Gel de compte (administration) : colonne absente des bases creees par une ancienne version.
+        runMigration(stmt, "ALTER TABLE bb_bank_accounts ADD COLUMN IF NOT EXISTS frozen BOOLEAN NOT NULL DEFAULT FALSE");
 
         renameLegacyCompaniesTable(stmt);
         // Cle etrangere vers la table des entreprises de l'autre mod : echoue (et sera retentee au prochain

@@ -4,10 +4,12 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
 import org.bb.bb_economy.database.BankManager;
+import org.bb.bb_economy.database.CompanyChoice;
 import org.bb.bb_economy.gui.AtmScreenHandler;
 import org.bb.bb_economy.gui.TpeScreenHandler;
 import org.bb.bb_economy.init.ModNetworking;
 
+import java.util.List;
 import java.util.function.Supplier;
 
 public class PinCheckPacket {
@@ -42,30 +44,36 @@ public class PinCheckPacket {
                     && tpe.stillValid(player)
                     && tpe.getAccessMode() == TpeScreenHandler.AccessMode.BUYER ? tpe : null;
             if (atmMenu == null && tpeMenu == null) {
-                sendResponse(player, false, 0, "Aucun terminal ouvert.");
+                sendResponse(player, false, 0, "Aucun terminal ouvert.", List.of());
                 return;
             }
 
-            // A l'ATM, le PIN verifie est celui de la carte en main (perso ou entreprise), pas forcement
-            // le compte personnel du profil actif. Au TPE, l'acheteur paie toujours depuis son compte perso.
+            // A l'ATM, le PIN verifie est celui de la carte du joueur (son compte perso est utilise au depart ; un patron peut
+            // ensuite choisir celui d'une de ses entreprises). Au TPE, l'acheteur paie toujours depuis son compte perso.
             if (atmMenu != null) {
-                BankManager.checkCardPin(player, atmMenu.getCardNumber(), atmMenu.getAccountNumber(), packet.getPin(), outcome -> {
-                    atmMenu.setPinValidated(outcome.check().isOk());
-                    sendResponse(player, outcome.check().isOk(), outcome.balance().doubleValue(), outcome.check().message());
+                BankManager.checkCardPin(player, atmMenu.getCardNumber(), atmMenu.getPersonalAccountNumber(), packet.getPin(), outcome -> {
+                    boolean ok = outcome.check().isOk();
+                    atmMenu.setPinValidated(ok);
+                    // Un patron recoit la liste de ses entreprises pour choisir son compte ; les autres, une liste vide.
+                    List<CompanyChoice> companies = ok
+                            ? atmMenu.getCompanies().stream().limit(64).toList()
+                            : List.of();
+                    sendResponse(player, ok, outcome.balance().doubleValue(), outcome.check().message(), companies);
                 });
             } else {
                 BankManager.checkPin(player, packet.getPin(), outcome -> {
                     tpeMenu.setPinValidated(outcome.check().isOk());
-                    sendResponse(player, outcome.check().isOk(), outcome.balance().doubleValue(), outcome.check().message());
+                    sendResponse(player, outcome.check().isOk(), outcome.balance().doubleValue(), outcome.check().message(), List.of());
                 });
             }
         });
         ctx.get().setPacketHandled(true);
     }
 
-    private static void sendResponse(ServerPlayer player, boolean success, double balance, String message) {
+    private static void sendResponse(ServerPlayer player, boolean success, double balance, String message,
+                                     List<CompanyChoice> companies) {
         ModNetworking.CHANNEL.sendTo(
-                new PinResponsePacket(success, balance, message),
+                new PinResponsePacket(success, balance, message, companies),
                 player.connection.connection,
                 net.minecraftforge.network.NetworkDirection.PLAY_TO_CLIENT
         );

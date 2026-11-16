@@ -8,8 +8,10 @@ import net.minecraft.client.gui.screens.inventory.MenuAccess;
 import net.minecraft.network.chat.Component;
 import net.minecraft.util.FormattedCharSequence;
 import net.minecraft.world.entity.player.Inventory;
+import org.bb.bb_economy.database.CompanyChoice;
 import org.bb.bb_economy.init.ModNetworking;
 import org.bb.bb_economy.network.AtmActionPacket;
+import org.bb.bb_economy.network.AtmSelectAccountPacket;
 import org.bb.bb_economy.network.PinCheckPacket;
 import org.bb.bb_economy.network.SetCardPinPacket;
 
@@ -23,7 +25,17 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
 
     private final AtmScreenHandler handler;
 
-    private enum AtmState { PIN, MAIN_MENU, DEPOSIT, WITHDRAW, TRANSFER, CHANGE_PIN }
+    private enum AtmState { PIN, ACCOUNT_SELECT, MAIN_MENU, DEPOSIT, WITHDRAW, TRANSFER, CHANGE_PIN }
+
+    private static final String PERSONAL_LABEL = "Compte personnel";
+    private static final int MAX_COMPANY_BUTTONS = 8;
+
+    /** Entreprises dont le joueur est le patron (envoyees avec la reponse au PIN) ; vide pour un joueur normal. */
+    private List<CompanyChoice> companies = List.of();
+    private String accountLabel = PERSONAL_LABEL;
+    private String pendingAccountLabel = PERSONAL_LABEL;
+    /** Vrai entre l'envoi d'un choix de compte et sa reponse, pour ne pas confondre avec une reponse d'operation. */
+    private boolean awaitingAccountSelection;
 
     private AtmState state = AtmState.PIN;
     private final StringBuilder pinInput = new StringBuilder();
@@ -64,6 +76,7 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             case WITHDRAW -> buildAmountScreen("Retrait", false);
             case TRANSFER -> buildAmountScreen("Virement", true);
             case CHANGE_PIN -> buildChangePinScreen();
+            case ACCOUNT_SELECT -> buildAccountSelectScreen();
         }
     }
 
@@ -103,18 +116,56 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
 
     private void buildMainMenu() {
         int cx = this.width / 2;
-        int cy = this.height / 2 - 22;
+        int y = this.height / 2 - 36;
+        int step = 22;
         int width = 120;
         addRenderableWidget(Button.builder(Component.literal("Depot"), btn -> { state = AtmState.DEPOSIT; rebuildScreen(); })
-                .pos(cx - width / 2, cy + 2).size(width, 20).build());
+                .pos(cx - width / 2, y).size(width, 20).build());
+        y += step;
         addRenderableWidget(Button.builder(Component.literal("Retrait"), btn -> { state = AtmState.WITHDRAW; rebuildScreen(); })
-                .pos(cx - width / 2, cy + 28).size(width, 20).build());
+                .pos(cx - width / 2, y).size(width, 20).build());
+        y += step;
         addRenderableWidget(Button.builder(Component.literal("Virement"), btn -> { state = AtmState.TRANSFER; rebuildScreen(); })
-                .pos(cx - width / 2, cy + 54).size(width, 20).build());
+                .pos(cx - width / 2, y).size(width, 20).build());
+        y += step;
         addRenderableWidget(Button.builder(Component.literal("Changer PIN"), btn -> { state = AtmState.CHANGE_PIN; rebuildScreen(); })
-                .pos(cx - width / 2, cy + 80).size(width, 20).build());
+                .pos(cx - width / 2, y).size(width, 20).build());
+        y += step;
+        if (!companies.isEmpty()) {
+            addRenderableWidget(Button.builder(Component.literal("Changer de compte"), btn -> { state = AtmState.ACCOUNT_SELECT; rebuildScreen(); })
+                    .pos(cx - width / 2, y).size(width, 20).build());
+            y += step;
+        }
         addRenderableWidget(Button.builder(Component.literal("Fermer"), btn -> onClose())
-                .pos(cx - width / 2, cy + 118).size(width, 20).build());
+                .pos(cx - width / 2, y + 6).size(width, 20).build());
+    }
+
+    /** Choix entre le compte personnel et celui de chaque entreprise dont le joueur est le patron. */
+    private void buildAccountSelectScreen() {
+        int cx = this.width / 2;
+        int y = this.height / 2 - 52;
+        int width = 150;
+
+        addRenderableWidget(Button.builder(Component.literal(PERSONAL_LABEL), btn -> selectAccount(AtmSelectAccountPacket.PERSONAL, PERSONAL_LABEL))
+                .pos(cx - width / 2, y).size(width, 20).build());
+        y += 22;
+        int shown = 0;
+        for (CompanyChoice company : companies) {
+            if (shown++ >= MAX_COMPANY_BUTTONS) {
+                break;
+            }
+            String label = company.name();
+            addRenderableWidget(Button.builder(Component.literal(label), btn -> selectAccount(company.id(), label))
+                    .pos(cx - width / 2, y).size(width, 20).build());
+            y += 22;
+        }
+    }
+
+    private void selectAccount(int companyId, String label) {
+        pendingAccountLabel = label;
+        awaitingAccountSelection = true;
+        ModNetworking.CHANNEL.sendToServer(new AtmSelectAccountPacket(companyId));
+        setMessage("Chargement du compte...", 0xAAAAAA);
     }
 
     private void buildChangePinScreen() {
@@ -184,11 +235,14 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
         setMessage("Verification...", 0xAAAAAA);
     }
 
-    public void onPinResponse(boolean success, double balance, String responseMessage) {
+    public void onPinResponse(boolean success, double balance, String responseMessage, List<CompanyChoice> ownedCompanies) {
         if (success) {
             currentBalance = BigDecimal.valueOf(balance);
-            state = AtmState.MAIN_MENU;
-            setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
+            companies = List.copyOf(ownedCompanies);
+            accountLabel = PERSONAL_LABEL;
+            // Un patron choisit d'abord son compte ; les autres joueurs arrivent directement sur le menu.
+            state = companies.isEmpty() ? AtmState.MAIN_MENU : AtmState.ACCOUNT_SELECT;
+            setMessage(companies.isEmpty() ? "Solde : " + currentBalance + " EUR" : "Choisissez un compte.", 0xFFFFFF);
             rebuildScreen();
         } else {
             setMessage(responseMessage, 0xFF4444);
@@ -229,6 +283,20 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
     }
 
     public void onTransactionResponse(boolean success, double balance, String responseMessage) {
+        // Reponse au choix d'un compte (le serveur repond avec le meme paquet que pour une operation).
+        if (state == AtmState.ACCOUNT_SELECT && awaitingAccountSelection) {
+            awaitingAccountSelection = false;
+            if (success) {
+                accountLabel = pendingAccountLabel;
+                currentBalance = BigDecimal.valueOf(balance);
+                state = AtmState.MAIN_MENU;
+                setMessage("Solde : " + currentBalance + " EUR", 0xFFFFFF);
+                rebuildScreen();
+            } else {
+                setMessage(responseMessage, 0xFF4444);
+            }
+            return;
+        }
         currentBalance = BigDecimal.valueOf(balance);
         String suffix = success ? ". Solde : " + currentBalance + " EUR" : "";
         setMessage(responseMessage + suffix, success ? 0x44FF44 : 0xFF4444);
@@ -304,9 +372,12 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
             case WITHDRAW -> "Retrait";
             case TRANSFER -> "Virement";
             case CHANGE_PIN -> "Changer PIN";
+            case ACCOUNT_SELECT -> "Choix du compte";
             default -> "ATM";
         });
-        renderBalance(g);
+        if (state != AtmState.ACCOUNT_SELECT) {
+            renderBalance(g);
+        }
         renderTransferPrefix(g);
         renderMessage(g, this.height / 2 + 104, 180);
 
@@ -342,6 +413,10 @@ public class AtmScreen extends Screen implements MenuAccess<AtmScreenHandler> {
     }
 
     private void renderHeader(GuiGraphics g, String title) {
+        // Un patron voit sur quel compte il opere ; les autres joueurs gardent l'en-tete habituel.
+        if (!companies.isEmpty() && state != AtmState.ACCOUNT_SELECT) {
+            title = title + " - " + accountLabel;
+        }
         g.drawString(this.font, title, this.width / 2 - this.font.width(title) / 2, this.height / 2 - 92, 0xEAEAEA, false);
     }
 

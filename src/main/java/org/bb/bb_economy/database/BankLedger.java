@@ -6,6 +6,10 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -26,6 +30,8 @@ public final class BankLedger {
     public static final String TYPE_TRANSFER = "TRANSFER";
     public static final String TYPE_TPE = "TPE";
     public static final String TYPE_INITIAL = "INITIAL";
+    public static final String TYPE_ADMIN_CREDIT = "ADMIN_CREDIT";
+    public static final String TYPE_ADMIN_DEBIT = "ADMIN_DEBIT";
 
     public static final String PERSONAL = "personal";
 
@@ -45,7 +51,7 @@ public final class BankLedger {
     public record Created(String accountNumber, String cardNumber) {
     }
 
-    private record Balance(String accountNumber, BigDecimal balance) {
+    private record Balance(String accountNumber, BigDecimal balance, boolean frozen) {
     }
 
     private final ConnectionSource source;
@@ -168,11 +174,12 @@ public final class BankLedger {
     }
 
     /**
-     * Cree le compte bancaire d'une entreprise (identifiee par son id dans la table de l'autre mod), rattache a un
-     * profil "proprietaire" pour la tracabilite. Vide si l'entreprise a deja un compte. Aucune carte n'est creee :
-     * les cartes sont emises a part (voir issueCard), et la verification que l'entreprise existe est faite par l'appelant.
+     * Cree le compte bancaire d'une entreprise (identifiee par son id dans la table de l'autre mod). Vide si
+     * l'entreprise a deja un compte. Le compte n'a AUCUN proprietaire (colonne owner a NULL) : une entreprise
+     * peut exister sans personnel, et son patron ou ses membres sont geres par l'autre mod, pas ici. Aucune
+     * carte n'est jamais liee a un compte d'entreprise (le patron utilise sa carte personnelle a l'ATM) ; la verification que l'entreprise existe est faite par l'appelant.
      */
-    public Optional<String> createCompanyAccount(int companyId, int ownerProfileId, BigDecimal startingBalance) {
+    public Optional<String> createCompanyAccount(int companyId, BigDecimal startingBalance) {
         if (startingBalance == null || startingBalance.signum() < 0 || startingBalance.scale() > 2
                 || startingBalance.compareTo(Money.MAX_AMOUNT) > 0) {
             throw new IllegalArgumentException("Solde de depart invalide : " + startingBalance);
@@ -180,14 +187,6 @@ public final class BankLedger {
         BigDecimal initial = startingBalance.setScale(2);
 
         return inTransaction(conn -> {
-            try (PreparedStatement lock = conn.prepareStatement("SELECT id FROM profiles WHERE id = ? FOR UPDATE")) {
-                lock.setInt(1, ownerProfileId);
-                try (ResultSet rs = lock.executeQuery()) {
-                    if (!rs.next()) {
-                        throw new IllegalArgumentException("Profil introuvable : " + ownerProfileId);
-                    }
-                }
-            }
             try (PreparedStatement checkCompany = conn.prepareStatement("SELECT 1 FROM bb_company_accounts WHERE company_id = ?")) {
                 checkCompany.setInt(1, companyId);
                 try (ResultSet rs = checkCompany.executeQuery()) {
@@ -200,12 +199,11 @@ public final class BankLedger {
             String accountNumber = uniqueIdentifier(conn, "bb_bank_accounts", "account_number", "ACC-");
 
             try (PreparedStatement insertAccount = conn.prepareStatement(
-                    "INSERT INTO bb_bank_accounts (account_number, account_type, account_balance, owner) VALUES (?, 'company', ?, ?)");
+                    "INSERT INTO bb_bank_accounts (account_number, account_type, account_balance, owner) VALUES (?, 'company', ?, NULL)");
                  PreparedStatement insertCompany = conn.prepareStatement(
                          "INSERT INTO bb_company_accounts (company_id, account_number) VALUES (?, ?)")) {
                 insertAccount.setString(1, accountNumber);
                 insertAccount.setBigDecimal(2, initial);
-                insertAccount.setInt(3, ownerProfileId);
                 insertAccount.executeUpdate();
 
                 insertCompany.setInt(1, companyId);
@@ -220,32 +218,29 @@ public final class BankLedger {
     }
 
     /**
-     * Ajoute une carte supplementaire a un compte deja existant (personnel ou entreprise), avec le PIN fourni.
-     * Contrairement a la carte creee avec un compte personnel, plusieurs cartes peuvent partager le meme
-     * compte (ex : une entreprise dont le patron et un gerant ont chacun leur propre carte et leur propre PIN).
-     * Vide si le compte n'existe pas.
+     * Compte de l'entreprise, cree a la volee s'il n'existe pas encore (solde nul). Sur : deux appels
+     * simultanes pour la meme entreprise aboutissent au meme compte (le perdant de la course relit celui du
+     * gagnant). Ainsi une entreprise creee apres coup par l'autre mod a toujours un compte des qu'on en a besoin.
      */
-    public Optional<String> issueCard(String accountNumber, String pinHash) {
-        return inTransaction(conn -> {
-            try (PreparedStatement checkAccount = conn.prepareStatement(
-                    "SELECT 1 FROM bb_bank_accounts WHERE account_number = ?")) {
-                checkAccount.setString(1, accountNumber);
-                try (ResultSet rs = checkAccount.executeQuery()) {
-                    if (!rs.next()) {
-                        return Optional.<String>empty();
-                    }
-                }
+    public String getOrCreateCompanyAccount(int companyId) {
+        Optional<String> existing = findCompanyAccountNumber(companyId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        try {
+            Optional<String> created = createCompanyAccount(companyId, BigDecimal.ZERO);
+            if (created.isPresent()) {
+                return created.get();
             }
-            String cardNumber = uniqueIdentifier(conn, "bb_bank_cards", "card_number", "CARD");
-            try (PreparedStatement insert = conn.prepareStatement(
-                    "INSERT INTO bb_bank_cards (card_number, card_pin, account_number) VALUES (?, ?, ?)")) {
-                insert.setString(1, cardNumber);
-                insert.setString(2, pinHash);
-                insert.setString(3, accountNumber);
-                insert.executeUpdate();
+        } catch (BankException e) {
+            // Course perdue : l'autre appelant a insere le lien entre notre lecture et notre insertion
+            // (violation de cle primaire, SQLSTATE 23xxx). Toute autre erreur est une vraie panne.
+            if (!(e.getCause() instanceof SQLException sql) || sql.getSQLState() == null || !sql.getSQLState().startsWith("23")) {
+                throw e;
             }
-            return Optional.of(cardNumber);
-        });
+        }
+        return findCompanyAccountNumber(companyId)
+                .orElseThrow(() -> new BankException("Creation du compte de l'entreprise " + companyId + " impossible."));
     }
 
     // -------------------------------------------------------------------------
@@ -286,6 +281,9 @@ public final class BankLedger {
             if (account == null) {
                 return TxResult.NO_ACCOUNT;
             }
+            if (account.frozen()) {
+                return TxResult.ACCOUNT_FROZEN;
+            }
             BigDecimal alreadyDone = dailyTotal(conn, TYPE_WITHDRAW, inGameDay, "account_origin", account.accountNumber());
             if (alreadyDone.add(amount).compareTo(dailyLimit) > 0) {
                 return TxResult.LIMIT_REACHED;
@@ -308,15 +306,15 @@ public final class BankLedger {
             return TxResult.INVALID_AMOUNT;
         }
         return inTransaction(conn -> {
-            BigDecimal balance = lockAccount(conn, accountNumber);
-            if (balance == null) {
+            Balance account = lockAccount(conn, accountNumber);
+            if (account == null) {
                 return TxResult.NO_ACCOUNT;
             }
             BigDecimal alreadyDone = dailyTotal(conn, TYPE_DEPOSIT, inGameDay, "account_target", accountNumber);
             if (alreadyDone.add(amount).compareTo(dailyLimit) > 0) {
                 return TxResult.LIMIT_REACHED;
             }
-            BigDecimal newBalance = balance.add(amount);
+            BigDecimal newBalance = account.balance().add(amount);
             if (newBalance.compareTo(Money.MAX_AMOUNT) > 0) {
                 return TxResult.BALANCE_OVERFLOW;
             }
@@ -332,20 +330,159 @@ public final class BankLedger {
             return TxResult.INVALID_AMOUNT;
         }
         return inTransaction(conn -> {
-            BigDecimal balance = lockAccount(conn, accountNumber);
-            if (balance == null) {
+            Balance account = lockAccount(conn, accountNumber);
+            if (account == null) {
                 return TxResult.NO_ACCOUNT;
+            }
+            if (account.frozen()) {
+                return TxResult.ACCOUNT_FROZEN;
             }
             BigDecimal alreadyDone = dailyTotal(conn, TYPE_WITHDRAW, inGameDay, "account_origin", accountNumber);
             if (alreadyDone.add(amount).compareTo(dailyLimit) > 0) {
                 return TxResult.LIMIT_REACHED;
             }
-            if (balance.compareTo(amount) < 0) {
+            if (account.balance().compareTo(amount) < 0) {
                 return TxResult.INSUFFICIENT_FUNDS;
             }
-            updateBalance(conn, accountNumber, balance.subtract(amount));
+            updateBalance(conn, accountNumber, account.balance().subtract(amount));
             logTransaction(conn, TYPE_WITHDRAW, amount, accountNumber, null, inGameDay);
             return TxResult.OK;
+        });
+    }
+
+    // -------------------------------------------------------------------------
+    // Administration
+    // -------------------------------------------------------------------------
+    // Ces operations ignorent le gel et les plafonds journaliers : elles servent a un administrateur pour
+    // corriger une erreur, rembourser ou saisir de l'argent. Elles sont toujours tracees dans le grand livre.
+
+    /** Cree de l'argent sur un compte (origine NULL dans le grand livre). */
+    public TxResult adminCredit(String accountNumber, BigDecimal amount, long inGameDay) {
+        if (!Money.isValid(amount)) {
+            return TxResult.INVALID_AMOUNT;
+        }
+        return inTransaction(conn -> {
+            Balance account = lockAccount(conn, accountNumber);
+            if (account == null) {
+                return TxResult.NO_ACCOUNT;
+            }
+            BigDecimal newBalance = account.balance().add(amount);
+            if (newBalance.compareTo(Money.MAX_AMOUNT) > 0) {
+                return TxResult.BALANCE_OVERFLOW;
+            }
+            updateBalance(conn, accountNumber, newBalance);
+            logTransaction(conn, TYPE_ADMIN_CREDIT, amount, null, accountNumber, inGameDay);
+            return TxResult.OK;
+        });
+    }
+
+    /** Retire de l'argent d'un compte (cible NULL dans le grand livre), sans jamais le rendre negatif. */
+    public TxResult adminDebit(String accountNumber, BigDecimal amount, long inGameDay) {
+        if (!Money.isValid(amount)) {
+            return TxResult.INVALID_AMOUNT;
+        }
+        return inTransaction(conn -> {
+            Balance account = lockAccount(conn, accountNumber);
+            if (account == null) {
+                return TxResult.NO_ACCOUNT;
+            }
+            if (account.balance().compareTo(amount) < 0) {
+                return TxResult.INSUFFICIENT_FUNDS;
+            }
+            updateBalance(conn, accountNumber, account.balance().subtract(amount));
+            logTransaction(conn, TYPE_ADMIN_DEBIT, amount, accountNumber, null, inGameDay);
+            return TxResult.OK;
+        });
+    }
+
+    /** Gele ou degele un compte. Vrai si le compte existe. Un compte gele ne peut rien emettre mais peut recevoir. */
+    public boolean setFrozen(String accountNumber, boolean frozen) {
+        return inTransaction(conn -> {
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "UPDATE bb_bank_accounts SET frozen = ? WHERE account_number = ?")) {
+                stmt.setBoolean(1, frozen);
+                stmt.setString(2, accountNumber);
+                return stmt.executeUpdate() > 0;
+            }
+        });
+    }
+
+    /** Fiche d'un compte, pour l'administration. */
+    public record AccountInfo(String accountNumber, String type, BigDecimal balance, boolean frozen) {
+    }
+
+    public Optional<AccountInfo> accountInfo(String accountNumber) {
+        return inTransaction(conn -> {
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "SELECT account_type, account_balance, frozen FROM bb_bank_accounts WHERE account_number = ?")) {
+                stmt.setString(1, accountNumber);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    return rs.next()
+                            ? Optional.of(new AccountInfo(accountNumber, rs.getString(1), rs.getBigDecimal(2), rs.getBoolean(3)))
+                            : Optional.<AccountInfo>empty();
+                }
+            }
+        });
+    }
+
+    /** Numeros des cartes liees a un compte. */
+    public List<String> cardNumbersOf(String accountNumber) {
+        return inTransaction(conn -> {
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "SELECT card_number FROM bb_bank_cards WHERE account_number = ? ORDER BY card_number")) {
+                stmt.setString(1, accountNumber);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    List<String> cards = new ArrayList<>();
+                    while (rs.next()) {
+                        cards.add(rs.getString(1));
+                    }
+                    return cards;
+                }
+            }
+        });
+    }
+
+    /** Une ligne du grand livre. */
+    public record TxRecord(long id, String type, BigDecimal amount, LocalDateTime date, String origin, String target) {
+    }
+
+    /** Les {@code limit} dernieres operations ou le compte est origine ou cible, de la plus recente a la plus ancienne. */
+    public List<TxRecord> recentTransactions(String accountNumber, int limit) {
+        int bounded = Math.max(1, Math.min(limit, 100));
+        return inTransaction(conn -> {
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "SELECT transaction_id, transaction_type, transaction_amount, transaction_date, account_origin, account_target " +
+                            "FROM bb_transactions WHERE account_origin = ? OR account_target = ? " +
+                            "ORDER BY transaction_id DESC LIMIT ?")) {
+                stmt.setString(1, accountNumber);
+                stmt.setString(2, accountNumber);
+                stmt.setInt(3, bounded);
+                try (ResultSet rs = stmt.executeQuery()) {
+                    List<TxRecord> records = new ArrayList<>();
+                    while (rs.next()) {
+                        Timestamp date = rs.getTimestamp(4);
+                        records.add(new TxRecord(rs.getLong(1), rs.getString(2), rs.getBigDecimal(3),
+                                date == null ? null : date.toLocalDateTime(), rs.getString(5), rs.getString(6)));
+                    }
+                    return records;
+                }
+            }
+        });
+    }
+
+    /**
+     * Donne un nouveau numero a une carte : l'ancien objet en jeu (perdu, vole, duplique) cesse de fonctionner
+     * puisque son numero n'existe plus en base. Vide si la carte n'existe pas.
+     */
+    public Optional<String> renumberCard(String oldCardNumber) {
+        return inTransaction(conn -> {
+            String newNumber = uniqueIdentifier(conn, "bb_bank_cards", "card_number", "CARD");
+            try (PreparedStatement stmt = conn.prepareStatement(
+                    "UPDATE bb_bank_cards SET card_number = ? WHERE card_number = ?")) {
+                stmt.setString(1, newNumber);
+                stmt.setString(2, oldCardNumber);
+                return stmt.executeUpdate() > 0 ? Optional.of(newNumber) : Optional.<String>empty();
+            }
         });
     }
 
@@ -405,8 +542,9 @@ public final class BankLedger {
         // Les deux verrous sont pris dans un ordre deterministe (ORDER BY) : pas de deadlock A->B / B->A.
         BigDecimal fromBalance = null;
         BigDecimal toBalance = null;
+        boolean fromFrozen = false;
         try (PreparedStatement stmt = conn.prepareStatement(
-                "SELECT account_number, account_balance FROM bb_bank_accounts " +
+                "SELECT account_number, account_balance, frozen FROM bb_bank_accounts " +
                         "WHERE account_number IN (?, ?) ORDER BY account_number FOR UPDATE")) {
             stmt.setString(1, fromAccount);
             stmt.setString(2, toAccount);
@@ -414,6 +552,7 @@ public final class BankLedger {
                 while (rs.next()) {
                     if (fromAccount.equals(rs.getString(1))) {
                         fromBalance = rs.getBigDecimal(2);
+                        fromFrozen = rs.getBoolean(3);
                     } else {
                         toBalance = rs.getBigDecimal(2);
                     }
@@ -425,6 +564,10 @@ public final class BankLedger {
         }
         if (toBalance == null) {
             return TxResult.TARGET_NOT_FOUND;
+        }
+        // Un compte gele ne peut rien emettre (il peut encore recevoir).
+        if (fromFrozen) {
+            return TxResult.ACCOUNT_FROZEN;
         }
         if (dailyLimit != null) {
             BigDecimal alreadyDone = dailyTotal(conn, type, inGameDay, "account_origin", fromAccount);
@@ -463,22 +606,22 @@ public final class BankLedger {
 
     private static Balance lockPersonalAccount(Connection conn, int profileId) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement(
-                "SELECT account_number, account_balance FROM bb_bank_accounts " +
+                "SELECT account_number, account_balance, frozen FROM bb_bank_accounts " +
                         "WHERE owner = ? AND account_type = ? FOR UPDATE")) {
             stmt.setInt(1, profileId);
             stmt.setString(2, PERSONAL);
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? new Balance(rs.getString(1), rs.getBigDecimal(2)) : null;
+                return rs.next() ? new Balance(rs.getString(1), rs.getBigDecimal(2), rs.getBoolean(3)) : null;
             }
         }
     }
 
-    private static BigDecimal lockAccount(Connection conn, String accountNumber) throws SQLException {
+    private static Balance lockAccount(Connection conn, String accountNumber) throws SQLException {
         try (PreparedStatement stmt = conn.prepareStatement(
-                "SELECT account_balance FROM bb_bank_accounts WHERE account_number = ? FOR UPDATE")) {
+                "SELECT account_balance, frozen FROM bb_bank_accounts WHERE account_number = ? FOR UPDATE")) {
             stmt.setString(1, accountNumber);
             try (ResultSet rs = stmt.executeQuery()) {
-                return rs.next() ? rs.getBigDecimal(1) : null;
+                return rs.next() ? new Balance(accountNumber, rs.getBigDecimal(1), rs.getBoolean(2)) : null;
             }
         }
     }

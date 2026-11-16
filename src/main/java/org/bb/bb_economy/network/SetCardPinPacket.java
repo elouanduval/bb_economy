@@ -41,9 +41,8 @@ public class SetCardPinPacket {
             }
 
             if (player.containerMenu instanceof AtmScreenHandler atmMenu && atmMenu.stillValid(player) && atmMenu.isPinValidated()) {
-                // Change le PIN de la carte tenue en main a l'ATM (deja authentifiee) : fonctionne aussi
-                // bien pour une carte personnelle que pour une carte d'entreprise, et a tout moment (pas
-                // seulement quand le PIN est encore celui par defaut).
+                // Change le PIN de la carte du joueur a l'ATM (deja authentifiee), a tout moment : pas seulement
+                // quand le PIN est encore celui par defaut.
                 BankManager.updateCardPinByNumber(player, atmMenu.getCardNumber(), packet.pin, success -> {
                     String message = success ? "Le PIN de cette carte a ete change." : "Impossible de changer le PIN.";
                     if (success) player.displayClientMessage(Component.literal(message), false);
