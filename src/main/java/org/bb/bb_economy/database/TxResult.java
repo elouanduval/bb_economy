@@ -11,6 +11,7 @@ public enum TxResult {
     LIMIT_REACHED("Limite journaliere atteinte."),
     BALANCE_OVERFLOW("Le solde maximal du compte serait depasse."),
     NOT_ENOUGH_CASH("Pas assez de billets."),
+    ACCOUNT_FROZEN("Ce compte est gele."),
     SERVICE_UNAVAILABLE("Service bancaire indisponible. Reessayez plus tard.");
 
     private final String message;

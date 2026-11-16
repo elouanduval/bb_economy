@@ -21,6 +21,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BankLedgerTest {
@@ -43,7 +44,8 @@ class BankLedgerTest {
                         account_number VARCHAR(20) NOT NULL PRIMARY KEY,
                         account_type VARCHAR(20) NOT NULL DEFAULT 'personal',
                         account_balance DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-                        owner INT NOT NULL,
+                        owner INT NULL,
+                        frozen BOOLEAN NOT NULL DEFAULT FALSE,
                         CONSTRAINT chk_balance_non_negative CHECK (account_balance >= 0)
                     )""");
             stmt.execute("""
@@ -58,12 +60,13 @@ class BankLedgerTest {
                         transaction_type VARCHAR(20) NOT NULL,
                         transaction_amount DECIMAL(10,2) NOT NULL,
                         transaction_ingame_day BIGINT NOT NULL DEFAULT 0,
+                        transaction_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                         account_origin VARCHAR(20) NULL,
                         account_target VARCHAR(20) NULL
                     )""");
             stmt.execute("""
-                    CREATE TABLE bb_companies (
-                        company_id VARCHAR(20) NOT NULL PRIMARY KEY,
+                    CREATE TABLE bb_company_accounts (
+                        company_id INT NOT NULL PRIMARY KEY,
                         account_number VARCHAR(20) NOT NULL
                     )""");
         }
@@ -303,9 +306,7 @@ class BankLedgerTest {
 
     @Test
     void createCompanyAccountLinksItToTheGivenIdWithoutACard() throws SQLException {
-        int owner = newProfile();
-
-        var created = ledger.createCompanyAccount("BOULANGERIE", owner, bd("50"));
+        var created = ledger.createCompanyAccount(1, bd("50"));
 
         assertTrue(created.isPresent());
         assertTrue(created.get().startsWith("ACC-"));
@@ -317,44 +318,88 @@ class BankLedgerTest {
                 assertTrue(rs.next());
                 assertEquals("company", rs.getString(1));
                 assertEquals(0, bd("50").compareTo(rs.getBigDecimal(2)));
-                assertEquals(owner, rs.getInt(3));
+                assertNull(rs.getObject(3), "un compte d'entreprise n'a pas de proprietaire");
             }
         }
     }
 
     @Test
     void createCompanyAccountTwiceForSameIdIsRefused() throws SQLException {
-        int owner = newProfile();
+        assertTrue(ledger.createCompanyAccount(1, bd("0")).isPresent());
+        assertTrue(ledger.createCompanyAccount(1, bd("0")).isEmpty());
+    }
 
-        assertTrue(ledger.createCompanyAccount("BOULANGERIE", owner, bd("0")).isPresent());
-        assertTrue(ledger.createCompanyAccount("BOULANGERIE", owner, bd("0")).isEmpty());
+    @Test
+    void companyAccountIsFoundByCompanyIdAndDifferentCompaniesGetDifferentAccounts() throws SQLException {
+        String first = ledger.createCompanyAccount(1, bd("0")).orElseThrow();
+        String second = ledger.createCompanyAccount(2, bd("0")).orElseThrow();
+
+        assertNotEquals(first, second);
+        assertEquals(first, ledger.findCompanyAccountNumber(1).orElseThrow());
+        assertEquals(second, ledger.findCompanyAccountNumber(2).orElseThrow());
+        assertTrue(ledger.findCompanyAccountNumber(3).isEmpty());
+    }
+
+    @Test
+    void getOrCreateCompanyAccountOpensOnceThenAlwaysReturnsTheSameAccount() {
+        String first = ledger.getOrCreateCompanyAccount(7);
+        String again = ledger.getOrCreateCompanyAccount(7);
+
+        assertTrue(first.startsWith("ACC-"));
+        assertEquals(first, again);
+        assertEquals(first, ledger.findCompanyAccountNumber(7).orElseThrow());
+        assertNotEquals(first, ledger.getOrCreateCompanyAccount(8));
+    }
+
+    @Test
+    void concurrentGetOrCreateForTheSameCompanyYieldsASingleAccount() throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(8);
+        List<Callable<String>> tasks = new ArrayList<>();
+        for (int i = 0; i < 16; i++) {
+            tasks.add(() -> ledger.getOrCreateCompanyAccount(42));
+        }
+        java.util.Set<String> accounts = new java.util.HashSet<>();
+        for (Future<String> f : pool.invokeAll(tasks)) {
+            accounts.add(f.get());
+        }
+        pool.shutdown();
+
+        assertEquals(1, accounts.size(), "toutes les requetes simultanees doivent aboutir au meme compte");
+        try (Connection conn = DriverManager.getConnection(url);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT COUNT(*) FROM bb_bank_accounts WHERE account_type = 'company'")) {
+            rs.next();
+            assertEquals(1, rs.getInt(1), "un seul compte d'entreprise doit exister en base");
+        }
+    }
+
+    @Test
+    void companyAccountWithoutOwnerNeverInterferesWithPersonalAccounts() throws SQLException {
+        int profile = profileWithBalance("100");
+        String company = ledger.getOrCreateCompanyAccount(1);
+
+        assertEquals(accountOf(profile), ledger.findPersonalAccountNumber(profile).orElseThrow());
+        assertNotEquals(company, accountOf(profile));
+        // un paiement TPE du joueur vers l'entreprise credite bien le compte sans proprietaire
+        assertEquals(TxResult.OK, ledger.payTpe(profile, company, bd("30"), DAY));
+        assertEquals(0, bd("30").compareTo(ledger.findBalance(company).orElseThrow()));
+        assertEquals(0, bd("70").compareTo(balanceOf(profile)));
     }
 
     // --- cartes et operations par numero de compte ----------------------------
 
     @Test
-    void issuedCardResolvesToItsAccountAndSharesItWithOtherCards() throws SQLException {
-        int owner = newProfile();
-        String companyAccount = ledger.createCompanyAccount("BOULANGERIE", owner, bd("100")).orElseThrow();
+    void personalCardResolvesToItsAccountAndUnknownCardsToNothing() throws SQLException {
+        int profile = newProfile();
+        BankLedger.Created created = ledger.createPersonalAccount(profile, "hash", bd("10"), DAY).orElseThrow();
 
-        String bossCard = ledger.issueCard(companyAccount, "hash1").orElseThrow();
-        String managerCard = ledger.issueCard(companyAccount, "hash2").orElseThrow();
-
-        assertNotEquals(bossCard, managerCard);
-        assertEquals(companyAccount, ledger.accountNumberForCard(bossCard).orElseThrow());
-        assertEquals(companyAccount, ledger.accountNumberForCard(managerCard).orElseThrow());
+        assertEquals(created.accountNumber(), ledger.accountNumberForCard(created.cardNumber()).orElseThrow());
         assertTrue(ledger.accountNumberForCard("CARD-DOES-NOT-EXIST").isEmpty());
     }
 
     @Test
-    void issueCardOnUnknownAccountIsRefused() {
-        assertTrue(ledger.issueCard("ACC-DOES-NOT-EXIST", "hash").isEmpty());
-    }
-
-    @Test
     void depositWithdrawAndTransferWorkDirectlyOnAnAccountNumber() throws SQLException {
-        int owner = newProfile();
-        String company = ledger.createCompanyAccount("BOULANGERIE", owner, bd("0")).orElseThrow();
+        String company = ledger.createCompanyAccount(1, bd("0")).orElseThrow();
         int player = profileWithBalance("0");
         String personal = accountOf(player);
 
@@ -367,6 +412,106 @@ class BankLedgerTest {
         assertEquals(TxResult.OK, ledger.transferFromAccount(company, personal, bd("100"), NO_LIMIT, DAY));
         assertEquals(0, bd("50").compareTo(ledger.findBalance(company).orElseThrow()));
         assertEquals(0, bd("100").compareTo(balanceOf(player)));
+    }
+
+    // --- administration -------------------------------------------------------
+
+    @Test
+    void adminCreditAndDebitMoveMoneyAreLoggedAndNeverGoNegative() throws SQLException {
+        int profile = profileWithBalance("100");
+        String account = accountOf(profile);
+
+        assertEquals(TxResult.OK, ledger.adminCredit(account, bd("50.50"), DAY));
+        assertEquals(0, bd("150.50").compareTo(balanceOf(profile)));
+        assertEquals(TxResult.OK, ledger.adminDebit(account, bd("150.50"), DAY));
+        assertEquals(0, BigDecimal.ZERO.compareTo(balanceOf(profile)));
+        assertEquals(TxResult.INSUFFICIENT_FUNDS, ledger.adminDebit(account, bd("0.01"), DAY));
+        assertEquals(TxResult.INVALID_AMOUNT, ledger.adminCredit(account, bd("0"), DAY));
+        assertEquals(TxResult.NO_ACCOUNT, ledger.adminCredit("ACC-DOES-NOT-EXIST", bd("1"), DAY));
+        assertEquals(1, countTransactions(BankLedger.TYPE_ADMIN_CREDIT));
+        assertEquals(1, countTransactions(BankLedger.TYPE_ADMIN_DEBIT));
+    }
+
+    @Test
+    void adminCreditCannotOverflowTheAccount() throws SQLException {
+        int profile = profileWithBalance("99999999.00");
+
+        assertEquals(TxResult.BALANCE_OVERFLOW, ledger.adminCredit(accountOf(profile), bd("2"), DAY));
+        assertEquals(0, bd("99999999.00").compareTo(balanceOf(profile)));
+    }
+
+    @Test
+    void frozenAccountCannotSendMoneyButStillReceivesAndAdminCanStillDebit() throws SQLException {
+        int frozen = profileWithBalance("100");
+        int other = profileWithBalance("100");
+        String frozenAccount = accountOf(frozen);
+
+        assertTrue(ledger.setFrozen(frozenAccount, true));
+
+        assertEquals(TxResult.ACCOUNT_FROZEN, ledger.withdraw(frozen, bd("10"), NO_LIMIT, DAY));
+        assertEquals(TxResult.ACCOUNT_FROZEN, ledger.withdraw(frozenAccount, bd("10"), NO_LIMIT, DAY));
+        assertEquals(TxResult.ACCOUNT_FROZEN, ledger.transfer(frozen, accountOf(other), bd("10"), NO_LIMIT, DAY));
+        assertEquals(TxResult.ACCOUNT_FROZEN, ledger.transferFromAccount(frozenAccount, accountOf(other), bd("10"), NO_LIMIT, DAY));
+        assertEquals(TxResult.ACCOUNT_FROZEN, ledger.payTpe(frozen, accountOf(other), bd("10"), DAY));
+        assertEquals(0, bd("100").compareTo(balanceOf(frozen)));
+
+        // il peut encore recevoir, et un administrateur peut encore intervenir
+        assertEquals(TxResult.OK, ledger.transfer(other, frozenAccount, bd("5"), NO_LIMIT, DAY));
+        assertEquals(TxResult.OK, ledger.deposit(frozenAccount, bd("5"), NO_LIMIT, DAY));
+        assertEquals(TxResult.OK, ledger.adminDebit(frozenAccount, bd("10"), DAY));
+        assertEquals(0, bd("100").compareTo(balanceOf(frozen)));
+
+        assertTrue(ledger.setFrozen(frozenAccount, false));
+        assertEquals(TxResult.OK, ledger.withdraw(frozen, bd("10"), NO_LIMIT, DAY));
+        assertFalse(ledger.setFrozen("ACC-DOES-NOT-EXIST", true));
+    }
+
+    @Test
+    void accountInfoAndCardNumbersDescribeTheAccount() throws SQLException {
+        int profile = newProfile();
+        BankLedger.Created created = ledger.createPersonalAccount(profile, "hash", bd("12.34"), DAY).orElseThrow();
+
+        BankLedger.AccountInfo info = ledger.accountInfo(created.accountNumber()).orElseThrow();
+        assertEquals("personal", info.type());
+        assertEquals(0, bd("12.34").compareTo(info.balance()));
+        assertFalse(info.frozen());
+        assertEquals(List.of(created.cardNumber()), ledger.cardNumbersOf(created.accountNumber()));
+        assertTrue(ledger.accountInfo("ACC-DOES-NOT-EXIST").isEmpty());
+    }
+
+    @Test
+    void recentTransactionsListsBothDirectionsNewestFirstAndHonoursTheLimit() throws SQLException {
+        int a = profileWithBalance("100");
+        int b = profileWithBalance("0");
+        String accountA = accountOf(a);
+
+        ledger.transfer(a, accountOf(b), bd("10"), NO_LIMIT, DAY);   // sortant pour A
+        ledger.transfer(a, accountOf(b), bd("20"), NO_LIMIT, DAY);
+        ledger.deposit(accountA, bd("5"), NO_LIMIT, DAY);            // entrant pour A
+
+        List<BankLedger.TxRecord> all = ledger.recentTransactions(accountA, 50);
+        // INITIAL (creation avec solde) + 2 virements + 1 depot
+        assertEquals(4, all.size());
+        assertEquals(BankLedger.TYPE_DEPOSIT, all.get(0).type());
+        assertEquals(0, bd("5").compareTo(all.get(0).amount()));
+        assertEquals(0, bd("20").compareTo(all.get(1).amount()));
+        assertTrue(all.get(0).id() > all.get(1).id());
+        assertEquals(2, ledger.recentTransactions(accountA, 2).size());
+        // l'historique d'un compte ne contient pas les operations des autres comptes
+        assertTrue(ledger.recentTransactions("ACC-DOES-NOT-EXIST", 10).isEmpty());
+    }
+
+    @Test
+    void renumberedCardGetsANewNumberAndTheOldOneStopsResolving() throws SQLException {
+        int profile = newProfile();
+        BankLedger.Created created = ledger.createPersonalAccount(profile, "hash", bd("0"), DAY).orElseThrow();
+
+        String newNumber = ledger.renumberCard(created.cardNumber()).orElseThrow();
+
+        assertNotEquals(created.cardNumber(), newNumber);
+        assertTrue(ledger.accountNumberForCard(created.cardNumber()).isEmpty());
+        assertEquals(created.accountNumber(), ledger.accountNumberForCard(newNumber).orElseThrow());
+        assertTrue(ledger.renumberCard("CARD-DOES-NOT-EXIST").isEmpty());
     }
 
     // --- concurrence ---------------------------------------------------------

@@ -14,6 +14,7 @@ import org.bb.bb_economy.init.ModNetworking;
 import org.slf4j.Logger;
 
 import java.math.BigDecimal;
+import java.util.OptionalInt;
 import java.util.function.Supplier;
 
 public class TpeSetAmountPacket {
@@ -70,12 +71,9 @@ public class TpeSetAmountPacket {
 
         String pendingText = tpe.getPendingAmount().toPlainString();
 
-        if (tpe.getCompanyId().isBlank()) {
+        OptionalInt companyId = BankManager.parseCompanyId(tpe.getCompanyId());
+        if (companyId.isEmpty()) {
             sendResponse(player, false, "Ce TPE n'est lie a aucune entreprise.", pendingText);
-            return;
-        }
-        if (!BankManager.playerWorksForCompany(player, tpe.getCompanyId())) {
-            sendResponse(player, false, "Vous n'etes pas autorise a utiliser ce TPE.", pendingText);
             return;
         }
 
@@ -87,11 +85,24 @@ public class TpeSetAmountPacket {
             return;
         }
 
-        tpe.setPendingAmount(amount);
-        player.level().sendBlockUpdated(packet.pos, tpe.getBlockState(), tpe.getBlockState(), 3);
+        // L'appartenance a l'entreprise est lue en base (hors thread principal) ; on revalide ensuite que la
+        // session et le bloc sont toujours les memes avant de modifier le montant.
+        BankManager.worksForCompany(player, companyId.getAsInt(), works -> {
+            if (!works) {
+                sendResponse(player, false, "Vous n'etes pas autorise a utiliser ce TPE.", pendingText);
+                return;
+            }
+            if (player.containerMenu != tpeMenu || !tpeMenu.stillValid(player)
+                    || player.level().getBlockEntity(packet.pos) != tpe) {
+                sendResponse(player, false, "Session TPE vendeur invalide.", "0");
+                return;
+            }
+            tpe.setPendingAmount(amount);
+            player.level().sendBlockUpdated(packet.pos, tpe.getBlockState(), tpe.getBlockState(), 3);
 
-        String shown = amount.stripTrailingZeros().toPlainString();
-        sendResponse(player, true, "Montant enregistre. Le client pourra payer " + shown + " EUR.", amount.toPlainString());
+            String shown = amount.stripTrailingZeros().toPlainString();
+            sendResponse(player, true, "Montant enregistre. Le client pourra payer " + shown + " EUR.", amount.toPlainString());
+        });
     }
 
     private static void sendResponse(ServerPlayer player, boolean success, String message, String amount) {

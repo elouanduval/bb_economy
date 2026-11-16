@@ -18,7 +18,6 @@ import net.minecraft.world.phys.BlockHitResult;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.gui.AtmScreenHandler;
 
-import java.util.Optional;
 
 public class AtmBlock extends Block {
 
@@ -46,17 +45,20 @@ public class AtmBlock extends Block {
             if (!(player instanceof ServerPlayer serverPlayer)) {
                 return InteractionResult.SUCCESS;
             }
-            Optional<String> cardNumber = BankManager.genuineCardInHand(player);
-            if (cardNumber.isEmpty()) {
-                player.displayClientMessage(Component.literal("Vous devez tenir une carte bancaire en main !"), true);
+            // Lu sur le thread principal, avant le premier appel base.
+            BankManager.HandCards cards = BankManager.cardsInHand(player);
+            if (cards.isEmpty()) {
+                player.displayClientMessage(Component.literal("Vous devez tenir votre carte bancaire en main !"), true);
                 return InteractionResult.SUCCESS;
             }
-            BankManager.resolveCardAccount(serverPlayer, cardNumber.get(), accountNumber -> {
-                if (accountNumber.isEmpty()) {
-                    player.displayClientMessage(Component.literal("Cette carte n'est liee a aucun compte."), true);
+            // La carte doit appartenir au joueur (profil actif). Le patron d'une ou plusieurs entreprises peut
+            // ensuite choisir leur compte a l'ecran (voir AtmSelectAccountPacket).
+            BankManager.resolveAtmSession(serverPlayer, cards, session -> {
+                if (session.isEmpty()) {
+                    player.displayClientMessage(Component.literal("Cette carte n'est pas la votre ou n'est liee a aucun compte."), true);
                     return;
                 }
-                AtmScreenHandler.open(player, pos, cardNumber.get(), accountNumber.get());
+                AtmScreenHandler.open(player, pos, session.get());
             });
         }
         return InteractionResult.SUCCESS;

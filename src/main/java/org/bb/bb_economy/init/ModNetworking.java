@@ -6,6 +6,7 @@ import net.minecraftforge.network.NetworkRegistry;
 import net.minecraftforge.network.simple.SimpleChannel;
 import org.bb.bb_economy.network.AtmActionPacket;
 import org.bb.bb_economy.network.AtmActionResponsePacket;
+import org.bb.bb_economy.network.AtmSelectAccountPacket;
 import org.bb.bb_economy.network.OpenPinSetupPacket;
 import org.bb.bb_economy.network.PinCheckPacket;
 import org.bb.bb_economy.network.PinResponsePacket;
@@ -18,7 +19,7 @@ import org.bb.bb_economy.network.TpeSetAmountResponsePacket;
 
 public class ModNetworking {
 
-    private static final String PROTOCOL_VERSION = "2";
+    private static final String PROTOCOL_VERSION = "3";
 
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocation.tryParse("bb_economy:main"),
@@ -116,6 +117,14 @@ public class ModNetworking {
                 TpePaymentResponsePacket::decode,
                 TpePaymentResponsePacket::handle,
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
+        );
+
+        CHANNEL.registerMessage(id++,
+                AtmSelectAccountPacket.class,
+                AtmSelectAccountPacket::encode,
+                AtmSelectAccountPacket::decode,
+                AtmSelectAccountPacket::handle,
+                java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
         );
     }
 }

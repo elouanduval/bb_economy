@@ -8,7 +8,6 @@ import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.Config;
 import org.bb.bb_economy.init.ModItems;
 import org.bb.bb_economy.item.CardItem;
-import org.bb.bb_economy.perms.JobService;
 import org.slf4j.Logger;
 
 import java.math.BigDecimal;
@@ -20,6 +19,7 @@ import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalInt;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -158,29 +158,102 @@ public final class BankManager {
     // Entreprises
     // -------------------------------------------------------------------------
 
-    public static boolean companyExists(String companyId) {
-        return query("SELECT 1 FROM bb_companies WHERE company_id = ?",
-                stmt -> stmt.setString(1, normalizeCompanyId(companyId)),
+    // Les tables bb_companies et bb_company_members appartiennent a l'autre mod (celui des entreprises) :
+    // on ne fait que les LIRE. Une entreprise y est identifiee par son id (INT). Nous ne possedons que le lien
+    // entreprise -> compte bancaire (bb_company_accounts).
+
+    /** Id d'entreprise tel que stocke dans le TPE (texte), ou vide s'il est absent ou invalide. */
+    public static OptionalInt parseCompanyId(String raw) {
+        if (raw == null || !raw.trim().matches("\\d{1,9}")) return OptionalInt.empty();
+        int id = Integer.parseInt(raw.trim());
+        return id > 0 ? OptionalInt.of(id) : OptionalInt.empty();
+    }
+
+    /** Id d'une entreprise d'apres son nom (insensible a la casse, selon la collation de la table). */
+    public static Optional<Integer> findCompanyIdByName(String name) {
+        return query("SELECT id FROM bb_companies WHERE name = ?",
+                stmt -> stmt.setString(1, name == null ? "" : name.trim()),
+                rs -> rs.next() ? Optional.of(rs.getInt(1)) : Optional.empty());
+    }
+
+    public static Optional<String> findCompanyName(int companyId) {
+        return query("SELECT name FROM bb_companies WHERE id = ?",
+                stmt -> stmt.setInt(1, companyId),
+                rs -> rs.next() ? Optional.of(rs.getString(1)) : Optional.empty());
+    }
+
+    public static boolean companyExists(int companyId) {
+        return query("SELECT 1 FROM bb_companies WHERE id = ?",
+                stmt -> stmt.setInt(1, companyId),
                 ResultSet::next);
     }
 
-    public static String getCompanyAccountNumber(String companyId) {
-        return query("SELECT account_number FROM bb_companies WHERE company_id = ?",
-                stmt -> stmt.setString(1, normalizeCompanyId(companyId)),
-                rs -> {
-                    if (rs.next()) {
-                        return rs.getString(1);
-                    }
-                    throw new BankException("Entreprise introuvable : " + companyId);
-                });
+    /** Compte bancaire lie a l'entreprise, vide si elle n'en a pas encore (voir {@link #ensureCompanyAccount}). */
+    public static Optional<String> findCompanyAccountNumber(int companyId) {
+        return LEDGER.findCompanyAccountNumber(companyId);
     }
 
     /**
-     * Vrai si le joueur est salarie de cette entreprise, c'est-a-dire membre du groupe LuckPerms du meme
-     * nom (voir {@link JobService}). Sans LuckPerms installe, personne n'est jamais reconnu comme salarie.
+     * Compte bancaire de l'entreprise, cree a la volee s'il n'existe pas encore (solde nul, aucun proprietaire).
+     * Toute entreprise a donc un compte des qu'on en a besoin (paiement, carte, TPE), meme si elle a ete creee
+     * apres coup par l'autre mod et meme si elle n'a aucun personnel. Ne verifie PAS que l'entreprise existe :
+     * c'est a l'appelant de le faire (voir {@link #companyExists}). Appel base bloquant.
      */
-    public static boolean playerWorksForCompany(Player player, String companyId) {
-        return JobService.isMemberOfCompany(player.getUUID(), normalizeCompanyId(companyId));
+    public static String ensureCompanyAccount(int companyId) {
+        return LEDGER.getOrCreateCompanyAccount(companyId);
+    }
+
+    /** Ids des entreprises (table de l'autre mod) qui n'ont pas encore de compte bancaire. */
+    private static List<Integer> companyIdsWithoutAccount() {
+        return query("SELECT c.id FROM bb_companies c LEFT JOIN bb_company_accounts a ON a.company_id = c.id "
+                        + "WHERE a.company_id IS NULL ORDER BY c.id",
+                stmt -> { },
+                rs -> {
+                    List<Integer> ids = new ArrayList<>();
+                    while (rs.next()) {
+                        ids.add(rs.getInt(1));
+                    }
+                    return ids;
+                });
+    }
+
+    /** Ouvre le compte de toutes les entreprises qui n'en ont pas encore ; retourne combien ont ete ouverts. */
+    public static int openMissingCompanyAccounts() {
+        int opened = 0;
+        for (int companyId : companyIdsWithoutAccount()) {
+            ensureCompanyAccount(companyId);
+            opened++;
+        }
+        return opened;
+    }
+
+    /**
+     * Vrai si le joueur est membre de l'entreprise (bb_company_members). Version {@code UUID} : fait un appel
+     * base, appelable depuis un thread d'arriere-plan. Le rang n'est pas pris en compte ici.
+     */
+    public static boolean isCompanyMember(UUID playerUuid, int companyId) {
+        return query("SELECT 1 FROM bb_company_members WHERE company_id = ? AND player_uuid = ?",
+                stmt -> {
+                    stmt.setInt(1, companyId);
+                    stmt.setString(2, playerUuid.toString());
+                },
+                ResultSet::next);
+    }
+
+    /** Verification async de l'appartenance du joueur a l'entreprise (TPE vendeur). En cas d'erreur : faux. */
+    public static void worksForCompany(ServerPlayer player, int companyId, Consumer<Boolean> onResult) {
+        UUID uuid = player.getUUID();
+        DbExecutor.supply(() -> isCompanyMember(uuid, companyId))
+                .whenCompleteAsync((result, error) -> {
+                    if (!isStillOnline(player)) return;
+                    if (error != null) {
+                        LOGGER.error("Verification de l'appartenance a l'entreprise {} impossible pour {}",
+                                companyId, player.getName().getString(), error);
+                        onResult.accept(false);
+                        return;
+                    }
+                    onResult.accept(result);
+                }, player.getServer());
     }
 
     // -------------------------------------------------------------------------
@@ -257,17 +330,6 @@ public final class BankManager {
                 || cards.offHand().map(card -> playerOwnsCard(playerUuid, card)).orElse(false);
     }
 
-    /**
-     * Numero d'une carte bancaire tenue en main (principale ou secondaire), sans verifier a qui elle
-     * appartient. Sert uniquement a ouvrir l'ATM : le compte concret est resolu ensuite via
-     * {@link #resolveCardAccount(String)}, et savoir operer dessus reste soumis au PIN de cette carte.
-     * Une carte d'entreprise n'est pas liee a un seul profil (plusieurs employes peuvent en avoir une
-     * copie), donc {@link #playerOwnsCard} ne peut pas servir de filtre ici.
-     */
-    public static Optional<String> genuineCardInHand(Player player) {
-        return firstCardNumber(player.getMainHandItem()).or(() -> firstCardNumber(player.getOffhandItem()));
-    }
-
     private static Optional<String> firstCardNumber(ItemStack stack) {
         if (stack.getItem() != ModItems.CARD.get()) return Optional.empty();
         String cardNumber = CardItem.getCardNumber(stack);
@@ -316,9 +378,8 @@ public final class BankManager {
     }
 
     /**
-     * Verifie le PIN d'une carte precise (pas "toutes les cartes du profil"), pour l'ATM quand la carte
-     * en main est celle d'une entreprise. Les tentatives sont comptees par carte : bloquer une carte
-     * d'entreprise ne bloque pas les autres cartes du meme compte.
+     * Verifie le PIN d'une carte precise (et non celui de "toutes les cartes du profil"), pour l'ATM. Les tentatives
+     * sont comptees par carte : un verrouillage ne touche que cette carte.
      */
     public static PinCheck checkCardPin(String cardNumber, int pin) {
         Optional<String> pinHash = cardPinHash(cardNumber);
@@ -381,9 +442,18 @@ public final class BankManager {
             stmt.setString(2, account.get());
         });
         if (rows > 0) {
-            PIN_ATTEMPTS.reset(account.get());
+            // Le verrouillage du PIN est compte par carte (ATM) ET par compte (TPE) : on efface les deux.
+            clearPinLocks(account.get());
         }
         return rows > 0;
+    }
+
+    /** Efface le compteur d'essais rates et le verrouillage du compte et de toutes ses cartes. */
+    public static void clearPinLocks(String accountNumber) {
+        PIN_ATTEMPTS.reset(accountNumber);
+        for (String cardNumber : LEDGER.cardNumbersOf(accountNumber)) {
+            PIN_ATTEMPTS.reset(cardNumber);
+        }
     }
 
     public static boolean updateCardPin(Player player, String pin) {
@@ -395,9 +465,8 @@ public final class BankManager {
     }
 
     /**
-     * Change le PIN d'une carte precise (contrairement a {@link #updateCardPin}, qui changerait le PIN
-     * de TOUTES les cartes du compte personnel). Utilise par l'ATM : on ne modifie que la carte tenue en
-     * main, pour que deux cartes d'un meme compte entreprise gardent chacune leur propre PIN.
+     * Change le PIN d'une carte precise (contrairement a {@link #updateCardPin}, qui change le PIN des cartes du
+     * compte personnel du profil actif). Utilise par l'ATM, pour la carte du joueur deja authentifiee par son PIN.
      */
     public static boolean updateCardPinByNumber(String cardNumber, String pin) {
         if (!isValidPin(pin) || isDefaultPin(pin)) return false;
@@ -438,15 +507,52 @@ public final class BankManager {
         return cardNumber;
     }
 
+    /**
+     * Reemet la carte du joueur : PIN remis par defaut, verrouillage efface, et NOUVEAU numero de carte. L'ancien
+     * objet (perdu, vole, duplique) ne correspond plus a rien en base et cesse donc de fonctionner.
+     * Retourne le nouveau numero.
+     */
     public static String reissueCard(Player player) {
-        String cardNumber = getCardNumber(player);
+        String oldNumber = getCardNumber(player);
         if (!resetCardPinToDefault(player)) {
             throw new BankException("Impossible de reinitialiser le PIN de la carte.");
         }
-        if (!giveCardItemByNumber(player, cardNumber)) {
+        String newNumber = LEDGER.renumberCard(oldNumber)
+                .orElseThrow(() -> new BankException("Impossible de renumeroter la carte bancaire."));
+        PIN_ATTEMPTS.reset(oldNumber);
+        if (!giveCardItemByNumber(player, newNumber)) {
             throw new BankException("Impossible de redonner la carte bancaire.");
         }
-        return cardNumber;
+        return newNumber;
+    }
+
+    // -------------------------------------------------------------------------
+    // Administration (commandes /bb_economy) : appels bloquants, reserves aux commandes
+    // -------------------------------------------------------------------------
+
+    public static TxResult adminCredit(String accountNumber, BigDecimal amount, MinecraftServer server) {
+        return LEDGER.adminCredit(accountNumber, amount, currentInGameDay(server));
+    }
+
+    public static TxResult adminDebit(String accountNumber, BigDecimal amount, MinecraftServer server) {
+        return LEDGER.adminDebit(accountNumber, amount, currentInGameDay(server));
+    }
+
+    /** Gele ou degele un compte ; faux si le compte n'existe pas. */
+    public static boolean setAccountFrozen(String accountNumber, boolean frozen) {
+        return LEDGER.setFrozen(accountNumber, frozen);
+    }
+
+    public static Optional<BankLedger.AccountInfo> accountInfo(String accountNumber) {
+        return LEDGER.accountInfo(accountNumber);
+    }
+
+    public static List<String> cardNumbersOf(String accountNumber) {
+        return LEDGER.cardNumbersOf(accountNumber);
+    }
+
+    public static List<BankLedger.TxRecord> recentTransactions(String accountNumber, int limit) {
+        return LEDGER.recentTransactions(accountNumber, limit);
     }
 
     // -------------------------------------------------------------------------
@@ -587,7 +693,7 @@ public final class BankManager {
      * rechargerait inutilement le thread principal entre deux). Ne touche pas a l'inventaire (le montant
      * en attente reste sur le bloc TPE, mis a jour par l'appelant apres coup).
      */
-    public static void payAtTpe(ServerPlayer buyer, HandCards cards, String companyId, BigDecimal amount,
+    public static void payAtTpe(ServerPlayer buyer, HandCards cards, int companyId, BigDecimal amount,
                                  Consumer<TpePaymentResult> onResult) {
         UUID uuid = buyer.getUUID();
         long inGameDay = currentInGameDay(buyer);
@@ -596,11 +702,12 @@ public final class BankManager {
             if (!ownsAnyOf(uuid, cards)) {
                 return new TpePaymentResult(TpeOutcome.NOT_HOLDING_CARD, TxResult.NO_ACCOUNT);
             }
-            String normalized = normalizeCompanyId(companyId);
-            if (!companyExists(normalized)) {
+            if (!companyExists(companyId)) {
                 return new TpePaymentResult(TpeOutcome.COMPANY_NOT_FOUND, TxResult.NO_ACCOUNT);
             }
-            String companyAccount = getCompanyAccountNumber(normalized);
+            // L'entreprise existe : si elle n'a pas encore de compte (creee apres coup, ou sans personnel), on
+            // l'ouvre ici plutot que de refuser le paiement.
+            String companyAccount = ensureCompanyAccount(companyId);
             TxResult result = processTpePayment(uuid, companyAccount, amount, inGameDay);
             return new TpePaymentResult(result.isOk() ? TpeOutcome.OK : TpeOutcome.REFUSED, result);
         }).whenCompleteAsync((outcome, error) -> {
@@ -656,15 +763,111 @@ public final class BankManager {
         }, player.getServer());
     }
 
-    /** Resolution async du compte associe a une carte (ouverture de l'ATM). */
-    public static void resolveCardAccount(ServerPlayer player, String cardNumber, Consumer<Optional<String>> onResult) {
-        DbExecutor.supply(() -> resolveCardAccount(cardNumber))
+
+    /**
+     * Ce qu'il faut pour ouvrir l'ATM : la carte du joueur, son compte personnel, et les entreprises dont il
+     * est le patron (donc dont il peut utiliser le compte en plus du sien).
+     */
+    public record AtmSession(String cardNumber, String personalAccountNumber, List<CompanyChoice> companies) {
+    }
+
+    /**
+     * Ouverture de l'ATM, en un seul aller-retour base : trouve, parmi les cartes tenues en main, celle qui
+     * appartient bien au joueur, son compte personnel, et les entreprises dont il est patron. Vide si aucune
+     * carte en main ne lui appartient. {@code cards} doit avoir ete capture sur le thread principal.
+     */
+    public static void resolveAtmSession(ServerPlayer player, HandCards cards, Consumer<Optional<AtmSession>> onResult) {
+        if (cards.isEmpty()) {
+            onResult.accept(Optional.empty());
+            return;
+        }
+        UUID uuid = player.getUUID();
+        DbExecutor.supply(() -> {
+            Optional<String> owned = cards.mainHand().filter(card -> playerOwnsCard(uuid, card))
+                    .or(() -> cards.offHand().filter(card -> playerOwnsCard(uuid, card)));
+            if (owned.isEmpty()) {
+                return Optional.<AtmSession>empty();
+            }
+            Optional<String> account = resolveCardAccount(owned.get());
+            if (account.isEmpty()) {
+                return Optional.<AtmSession>empty();
+            }
+            return Optional.of(new AtmSession(owned.get(), account.get(), findOwnedCompanies(uuid)));
+        }).whenCompleteAsync((result, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                LOGGER.error("Ouverture de l'ATM impossible pour {}", player.getName().getString(), error);
+                onResult.accept(Optional.empty());
+                return;
+            }
+            onResult.accept(result);
+        }, player.getServer());
+    }
+
+    /**
+     * Entreprises dont le joueur est le patron. Ces tables appartiennent a l'autre mod : si elles n'existent
+     * pas (encore), le joueur n'a simplement pas d'entreprise et l'ATM reste utilisable avec son compte perso.
+     */
+    private static List<CompanyChoice> findOwnedCompanies(UUID playerUuid) {
+        try {
+            return query("SELECT id, name FROM bb_companies WHERE owner_uuid = ? ORDER BY name",
+                    stmt -> stmt.setString(1, playerUuid.toString()),
+                    rs -> {
+                        List<CompanyChoice> companies = new ArrayList<>();
+                        while (rs.next()) {
+                            companies.add(new CompanyChoice(rs.getInt(1), rs.getString(2)));
+                        }
+                        return companies;
+                    });
+        } catch (BankException e) {
+            LOGGER.debug("Lecture des entreprises du joueur impossible (table des entreprises absente ?) : {}", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Compte d'entreprise choisi a l'ATM, avec son solde. */
+    public record AccountSelection(String accountNumber, BigDecimal balance) {
+    }
+
+    /**
+     * Selectionne le compte d'une entreprise a l'ATM. Reverifie en base que le joueur en est bien le patron
+     * (la liste proposee a l'ouverture peut etre perimee), ouvre le compte s'il n'existe pas encore et lit son
+     * solde. Vide si le joueur n'est pas le patron.
+     */
+    public static void selectCompanyAccount(ServerPlayer player, int companyId, Consumer<Optional<AccountSelection>> onResult) {
+        UUID uuid = player.getUUID();
+        DbExecutor.supply(() -> {
+            boolean isOwner = query("SELECT 1 FROM bb_companies WHERE id = ? AND owner_uuid = ?",
+                    stmt -> {
+                        stmt.setInt(1, companyId);
+                        stmt.setString(2, uuid.toString());
+                    },
+                    ResultSet::next);
+            if (!isOwner) {
+                return Optional.<AccountSelection>empty();
+            }
+            String account = ensureCompanyAccount(companyId);
+            return Optional.of(new AccountSelection(account, LEDGER.findBalance(account).orElse(BigDecimal.ZERO)));
+        }).whenCompleteAsync((result, error) -> {
+            if (!isStillOnline(player)) return;
+            if (error != null) {
+                LOGGER.error("Selection du compte de l'entreprise {} impossible pour {}",
+                        companyId, player.getName().getString(), error);
+                onResult.accept(Optional.empty());
+                return;
+            }
+            onResult.accept(result);
+        }, player.getServer());
+    }
+
+    /** Solde d'un compte, lu hors du thread principal (retour au compte personnel a l'ATM). */
+    public static void loadBalance(ServerPlayer player, String accountNumber, Consumer<BigDecimal> onResult) {
+        DbExecutor.supply(() -> LEDGER.findBalance(accountNumber).orElse(BigDecimal.ZERO))
                 .whenCompleteAsync((result, error) -> {
                     if (!isStillOnline(player)) return;
                     if (error != null) {
-                        LOGGER.error("Resolution du compte de la carte {} impossible pour {}",
-                                cardNumber, player.getName().getString(), error);
-                        onResult.accept(Optional.empty());
+                        LOGGER.error("Lecture du solde impossible pour le compte {}", accountNumber, error);
+                        onResult.accept(BigDecimal.ZERO);
                         return;
                     }
                     onResult.accept(result);
@@ -753,27 +956,18 @@ public final class BankManager {
     }
 
     /**
-     * Cree le compte bancaire d'une entreprise, rattache administrativement a un joueur (le "proprietaire").
-     * Le lien salarie/entreprise ne vit pas ici : il faut creer separement un groupe LuckPerms du meme nom
-     * (insensible a la casse) que {@code companyId} et y ajouter les salaries (voir {@link JobService}).
+     * Ouvre le compte bancaire d'une entreprise deja creee par l'autre mod (commande admin). Le compte n'a pas
+     * de proprietaire : l'entreprise elle-meme, ses membres et ses rangs ne sont pas geres ici.
+     *
+     * @throws IllegalArgumentException si l'entreprise n'existe pas
+     * @throws IllegalStateException    si l'entreprise a deja un compte
      */
-    public static String createCompanyAccount(String companyId, Player owner) {
-        int profileId = requireProfileId(owner);
-        String normalized = normalizeCompanyId(companyId);
-        return LEDGER.createCompanyAccount(normalized, profileId, BigDecimal.ZERO)
-                .orElseThrow(() -> new IllegalStateException("Une entreprise existe deja avec cet identifiant : " + normalized));
-    }
-
-    /**
-     * Emet une nouvelle carte pour le compte d'une entreprise (PIN par defaut) et la remet au joueur cible.
-     * Plusieurs cartes peuvent coexister pour la meme entreprise (patron, gerant...), chacune avec son PIN.
-     */
-    public static String issueCompanyCard(String companyId, Player recipient) {
-        String accountNumber = getCompanyAccountNumber(companyId);
-        String cardNumber = LEDGER.issueCard(accountNumber, PinHasher.hash(defaultPin()))
-                .orElseThrow(() -> new BankException("Compte entreprise introuvable : " + accountNumber));
-        giveRawCardItem(recipient, cardNumber);
-        return cardNumber;
+    public static String openCompanyAccount(int companyId) {
+        if (!companyExists(companyId)) {
+            throw new IllegalArgumentException("Entreprise introuvable (id " + companyId + ").");
+        }
+        return LEDGER.createCompanyAccount(companyId, BigDecimal.ZERO)
+                .orElseThrow(() -> new IllegalStateException("Cette entreprise a deja un compte bancaire."));
     }
 
     // -------------------------------------------------------------------------
@@ -786,24 +980,15 @@ public final class BankManager {
         return stack;
     }
 
-    /** Redonne une carte PERSONNELLE : refuse si elle n'appartient pas au profil actif du joueur. */
+    /** Redonne une carte : refuse si elle n'appartient pas au profil actif du joueur. */
     public static boolean giveCardItemByNumber(Player player, String cardNumber) {
         if (!playerOwnsCard(player, cardNumber)) return false;
-        giveRawCardItem(player, cardNumber);
-        return true;
-    }
-
-    /**
-     * Remet physiquement une carte au joueur, sans verifier l'appartenance. Une carte d'entreprise n'est
-     * pas liee a un seul profil (voir {@link #issueCompanyCard}) : c'est la possession de l'objet et le
-     * PIN, pas une verification de propriete, qui protegent son usage.
-     */
-    private static void giveRawCardItem(Player player, String cardNumber) {
         ItemStack cardStack = createCardItem(cardNumber);
         if (!player.getInventory().add(cardStack)) {
             player.drop(cardStack, false);
         }
         markCardItemGiven(cardNumber, player.getUUID().toString());
+        return true;
     }
 
     public static boolean giveWalletItem(Player player) {
@@ -885,13 +1070,6 @@ public final class BankManager {
         return String.format("%04d", Config.DEFAULT_CARD_PIN);
     }
 
-    public static String normalizeCompanyId(String companyId) {
-        if (companyId == null) throw new IllegalArgumentException("companyId ne peut pas etre null");
-        String value = companyId.trim().toUpperCase();
-        if (value.isBlank()) throw new IllegalArgumentException("companyId ne peut pas etre vide");
-        return value;
-    }
-
     private static BigDecimal dailyLimit(double configuredValue) {
         return BigDecimal.valueOf(configuredValue).setScale(2, RoundingMode.HALF_UP);
     }
@@ -901,5 +1079,9 @@ public final class BankManager {
         MinecraftServer server = player.getServer();
         long dayTime = server != null ? server.overworld().getDayTime() : player.level().getDayTime();
         return dayTime / 24000L;
+    }
+
+    private static long currentInGameDay(MinecraftServer server) {
+        return server.overworld().getDayTime() / 24000L;
     }
 }
