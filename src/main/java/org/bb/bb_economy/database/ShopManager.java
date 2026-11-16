@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
+import org.bb.bb_economy.Msg;
 import org.bb.bb_economy.item.ShopItems;
 import org.slf4j.Logger;
 
@@ -97,11 +98,11 @@ public final class ShopManager {
     public static void trade(ServerPlayer player, int companyId, int offerId, int quantity, Payment payment,
                              boolean pinValidated, Consumer<TradeResult> onResult) {
         if (quantity < 1 || quantity > MAX_QUANTITY) {
-            onResult.accept(TradeResult.fail("Quantite invalide (de 1 a " + MAX_QUANTITY + " lots)."));
+            onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.invalid_lots", MAX_QUANTITY)));
             return;
         }
         if (payment == Payment.CARD && !pinValidated) {
-            onResult.accept(TradeResult.fail("Validez d'abord votre PIN pour payer par carte."));
+            onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.pin_first")));
             return;
         }
 
@@ -126,7 +127,7 @@ public final class ShopManager {
                 return;
             }
             if (context.isEmpty()) {
-                onResult.accept(TradeResult.fail("Cette offre n'est plus disponible."));
+                onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.offer_gone")));
                 return;
             }
             settle(player, context.get(), quantity, payment, uuid, cards, inGameDay, onResult);
@@ -143,33 +144,32 @@ public final class ShopManager {
         // La quantite demandee est un nombre de LOTS : on echange lots x taille du lot objets.
         long itemCount = (long) quantity * offer.bundleSize();
         if (itemCount > MAX_ITEMS) {
-            onResult.accept(TradeResult.fail("Quantite trop elevee (" + MAX_ITEMS + " objets maximum par echange)."));
+            onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.too_many_items", MAX_ITEMS)));
             return;
         }
         int items = (int) itemCount;
 
         Item item = ShopItems.itemOf(offer.itemKey()).orElse(null);
         if (item == null) {
-            onResult.accept(TradeResult.fail("Objet inconnu : " + offer.itemKey()));
+            onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.unknown_item", offer.itemKey())));
             return;
         }
         if (!Money.isValid(total)) {
-            onResult.accept(TradeResult.fail("Montant invalide."));
+            onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "tx.invalid_amount")));
             return;
         }
         if (payment == Payment.CASH && !Money.isWhole(total)) {
-            onResult.accept(TradeResult.fail("Paiement en liquide impossible : le total ("
-                    + total.toPlainString() + " " + Money.CURRENCY + ") n'est pas un montant entier. Payez par carte."));
+            onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.cash_not_whole", total.toPlainString() + " " + Money.CURRENCY)));
             return;
         }
-        String itemName = new ItemStack(item).getHoverName().getString();
+        String itemName = Msg.translated(item.getDescriptionId());
+        String totalText = total.toPlainString() + " " + Money.CURRENCY;
         int bills = payment == Payment.CASH ? Money.toBills(total) : 0;
 
         // 1) On retire au joueur ce qu'il donne.
         if (playerSells) {
             if (ShopItems.countPlain(player, item) < items) {
-                onResult.accept(TradeResult.fail("Vous n'avez pas assez de " + itemName
-                        + " (seuls les objets sans donnees ni usure sont acceptes)."));
+                onResult.accept(TradeResult.fail(Msg.of(Msg.PREFIX + "shop.not_enough_items", itemName)));
                 return;
             }
             ShopItems.removePlain(player, item, items);
@@ -209,10 +209,10 @@ public final class ShopManager {
                         if (payment == Payment.CASH) {
                             BankManager.addMoneyStacks(player, bills);
                         }
-                        onResult.accept(TradeResult.ok("Vendu " + items + " x " + itemName + " pour " + total.toPlainString() + " " + Money.CURRENCY + "."));
+                        onResult.accept(TradeResult.ok(Msg.of(Msg.PREFIX + "shop.sold", items, itemName, totalText)));
                     } else {
                         ShopItems.give(player, item, items);
-                        onResult.accept(TradeResult.ok("Achete " + items + " x " + itemName + " pour " + total.toPlainString() + " " + Money.CURRENCY + "."));
+                        onResult.accept(TradeResult.ok(Msg.of(Msg.PREFIX + "shop.bought", items, itemName, totalText)));
                     }
                     BankManager.syncInventory(player);
                 }, player.getServer());
@@ -245,7 +245,7 @@ public final class ShopManager {
 
     private static String failureMessage(boolean playerSells, TxResult result) {
         if (result == TxResult.INSUFFICIENT_FUNDS) {
-            return playerSells ? "La boutique n'a pas assez d'argent pour vous payer." : "Solde insuffisant.";
+            return playerSells ? Msg.of(Msg.PREFIX + "shop.shop_broke") : result.message();
         }
         return result.message();
     }

@@ -1,28 +1,25 @@
 package org.bb.bb_economy.database;
 
+import org.bb.bb_economy.Msg;
+
 /** Resultat d'une operation bancaire. Seul OK signifie que de l'argent a effectivement bouge. */
 public enum TxResult {
-    OK("Operation effectuee."),
-    INVALID_AMOUNT("Montant invalide."),
-    NO_ACCOUNT("Aucun compte bancaire n'est disponible."),
-    TARGET_NOT_FOUND("Compte destinataire introuvable."),
-    SAME_ACCOUNT("Le compte source et le compte destinataire sont identiques."),
-    INSUFFICIENT_FUNDS("Solde insuffisant."),
-    LIMIT_REACHED("Limite journaliere atteinte."),
-    BALANCE_OVERFLOW("Le solde maximal du compte serait depasse."),
-    NOT_ENOUGH_CASH("Pas assez de billets."),
-    ACCOUNT_FROZEN("Ce compte est gele."),
-    CARD_NOT_IN_HAND("Gardez votre carte bancaire en main pour payer par carte."),
-    SERVICE_UNAVAILABLE("Service bancaire indisponible. Reessayez plus tard.");
+    OK,
+    INVALID_AMOUNT,
+    NO_ACCOUNT,
+    TARGET_NOT_FOUND,
+    SAME_ACCOUNT,
+    INSUFFICIENT_FUNDS,
+    LIMIT_REACHED,
+    BALANCE_OVERFLOW,
+    NOT_ENOUGH_CASH,
+    ACCOUNT_FROZEN,
+    CARD_NOT_IN_HAND,
+    SERVICE_UNAVAILABLE;
 
-    private final String message;
-
-    TxResult(String message) {
-        this.message = message;
-    }
-
+    /** Cle de traduction du message ({@code bb_economy.tx.<nom en minuscules>}), a envoyer au client. */
     public String message() {
-        return message;
+        return Msg.of(Msg.PREFIX + "tx." + name().toLowerCase());
     }
 
     public boolean isOk() {

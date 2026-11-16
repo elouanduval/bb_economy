@@ -1,5 +1,6 @@
 package org.bb.bb_economy.item;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.item.BlockItem;
@@ -36,7 +37,7 @@ public class ShopItem extends BlockItem {
         super.appendHoverText(stack, level, tooltip, flag);
         String companyId = getCompanyId(stack);
         if (!companyId.isBlank()) {
-            tooltip.add(Component.literal("Entreprise (id) : " + companyId).withStyle(ChatFormatting.GRAY));
+            tooltip.add(Component.translatable(Msg.PREFIX + "item.company", companyId).withStyle(ChatFormatting.GRAY));
         }
     }
 }

@@ -80,7 +80,7 @@ public class BB_Economy {
                     // Verifie si le joueur a un profil actif et une carte avec PIN par defaut
                     if (BankManager.hasActiveProfile(player) && BankManager.hasDefaultCardPin(player)) {
                         player.displayClientMessage(
-                                Component.literal("Definissez maintenant le code PIN de votre carte bancaire."),
+                                Component.translatable(Msg.PREFIX + "pin.setup_prompt"),
                                 false
                         );
                         ModNetworking.CHANNEL.sendTo(

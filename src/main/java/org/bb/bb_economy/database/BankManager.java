@@ -6,6 +6,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.Config;
+import org.bb.bb_economy.Msg;
 import org.bb.bb_economy.init.ModItems;
 import org.bb.bb_economy.item.CardItem;
 import org.slf4j.Logger;
@@ -50,12 +51,12 @@ public final class BankManager {
 
         public String message() {
             return switch (status) {
-                case OK -> "PIN valide.";
+                case OK -> Msg.of(Msg.PREFIX + "pin.valid");
                 case WRONG -> attemptsLeft > 0
-                        ? "PIN incorrect. Essais restants : " + attemptsLeft + "."
-                        : "PIN incorrect. Compte verrouille pendant " + formatDuration(lockSeconds) + ".";
-                case LOCKED -> "Trop d'essais. Reessayez dans " + formatDuration(lockSeconds) + ".";
-                case NO_CARD -> "Aucune carte bancaire disponible.";
+                        ? Msg.of(Msg.PREFIX + "pin.wrong", attemptsLeft)
+                        : Msg.of(Msg.PREFIX + "pin.wrong_locked", formatDuration(lockSeconds));
+                case LOCKED -> Msg.of(Msg.PREFIX + "pin.locked", formatDuration(lockSeconds));
+                case NO_CARD -> Msg.of(Msg.PREFIX + "pin.no_card");
                 case ERROR -> TxResult.SERVICE_UNAVAILABLE.message();
             };
         }
@@ -676,12 +677,12 @@ public final class BankManager {
         public String message() {
             return switch (outcome) {
                 case OK -> txResult.message();
-                case NOT_HOLDING_CARD -> "Vous devez garder votre carte bancaire en main pour payer.";
-                case COMPANY_NOT_FOUND -> "Compte entreprise introuvable.";
+                case NOT_HOLDING_CARD -> Msg.of(Msg.PREFIX + "tpe.keep_card");
+                case COMPANY_NOT_FOUND -> Msg.of(Msg.PREFIX + "tpe.company_account_missing");
                 case REFUSED -> switch (txResult) {
-                    case INSUFFICIENT_FUNDS -> "Paiement refuse : solde insuffisant.";
-                    case SAME_ACCOUNT -> "Vous ne pouvez pas payer votre propre compte.";
-                    default -> "Paiement refuse : " + txResult.message();
+                    case INSUFFICIENT_FUNDS -> Msg.of(Msg.PREFIX + "tpe.refused_funds");
+                    case SAME_ACCOUNT -> Msg.of(Msg.PREFIX + "tpe.own_account");
+                    default -> Msg.of(Msg.PREFIX + "tpe.refused", Msg.translated(txResult.message()));
                 };
             };
         }

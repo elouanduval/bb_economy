@@ -138,6 +138,14 @@ Fonctionnement :
 - Seuls les objets sans données ni usure sont repris ; les objets vendus par la boutique sont créés à la demande (stock illimité).
 - Pour fermer une boutique quand un joueur reprend le métier : `shop disable` sur ses offres.
 
+## Langues
+
+Les textes vus par les joueurs (ATM, TPE, boutiques, messages, infobulles, noms des objets et blocs) existent en français (`fr_fr.json`) et en anglais (`en_us.json`), dans `src/main/resources/assets/bb_economy/lang/`. Le client affiche la langue choisie dans Minecraft ; une langue absente retombe sur l'anglais.
+
+Pour ajouter une langue : copier `en_us.json` en `<code_langue>.json` (ex. `es_es.json`) et traduire les valeurs. Les `%s` sont remplacés dans l'ordre, il faut les conserver. Le test `LangFilesTest` vérifie qu'aucune clé utilisée dans le code ne manque et que le français et l'anglais ont les mêmes clés.
+
+Le serveur n'envoie pas de texte mais une clé de traduction (classe `Msg`) : c'est le client qui la traduit. Les commandes d'administration et les journaux du serveur restent en français.
+
 ## Architecture
 
 ```

@@ -108,7 +108,7 @@ public class AtmScreenHandler extends AbstractContainerMenu {
 
         @Override
         public Component getDisplayName() {
-            return Component.literal("ATM");
+            return Component.translatable("block.bb_economy.atm");
         }
 
         @Override

@@ -121,7 +121,7 @@ public class ShopScreenHandler extends AbstractContainerMenu {
 
         @Override
         public Component getDisplayName() {
-            return Component.literal("Boutique");
+            return Component.translatable("block.bb_economy.shop");
         }
 
         @Override

@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
@@ -46,7 +47,7 @@ public class PinCheckPacket {
                     && tpe.getAccessMode() == TpeScreenHandler.AccessMode.BUYER ? tpe : null;
             ShopScreenHandler shopMenu = player.containerMenu instanceof ShopScreenHandler shop && shop.stillValid(player) ? shop : null;
             if (atmMenu == null && tpeMenu == null && shopMenu == null) {
-                sendResponse(player, false, 0, "Aucun terminal ouvert.", List.of());
+                sendResponse(player, false, 0, Msg.of(Msg.PREFIX + "pin.no_terminal"), List.of());
                 return;
             }
 

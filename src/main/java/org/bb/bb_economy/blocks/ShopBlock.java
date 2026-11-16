@@ -1,5 +1,6 @@
 package org.bb.bb_economy.blocks;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
@@ -63,14 +64,14 @@ public class ShopBlock extends BaseEntityBlock {
         }
         OptionalInt companyId = BankManager.parseCompanyId(shop.getCompanyId());
         if (companyId.isEmpty()) {
-            player.displayClientMessage(Component.literal("Cette boutique n'est liee a aucune entreprise."), true);
+            player.displayClientMessage(Component.translatable(Msg.PREFIX + "shop.no_company"), true);
             return InteractionResult.SUCCESS;
         }
 
         // Les offres sont lues en base, hors du thread principal.
         ShopManager.loadShop(serverPlayer, companyId.getAsInt(), view -> {
             if (view.isEmpty()) {
-                player.displayClientMessage(Component.literal("Cette boutique est indisponible (entreprise introuvable)."), true);
+                player.displayClientMessage(Component.translatable(Msg.PREFIX + "shop.unavailable"), true);
                 return;
             }
             if (level.getBlockEntity(pos) != shop) {

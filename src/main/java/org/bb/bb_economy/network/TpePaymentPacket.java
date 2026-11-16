@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -54,17 +55,17 @@ public class TpePaymentPacket {
                 || tpeMenu.getAccessMode() != TpeScreenHandler.AccessMode.BUYER
                 || !tpeMenu.getPos().equals(packet.pos)
                 || !tpeMenu.stillValid(player)) {
-            sendResponse(player, false, "Session TPE client invalide.", "0");
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.invalid_client_session"), "0");
             return;
         }
         if (!tpeMenu.isPinValidated()) {
-            sendResponse(player, false, "PIN incorrect.", "0");
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.wrong_pin"), "0");
             return;
         }
 
         BlockEntity blockEntity = player.level().getBlockEntity(packet.pos);
         if (!(blockEntity instanceof TpeBlockEntity tpe)) {
-            sendResponse(player, false, "TPE introuvable.", "0");
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.not_found"), "0");
             return;
         }
 
@@ -72,17 +73,17 @@ public class TpePaymentPacket {
         String pendingText = pendingAmount.toPlainString();
 
         if (pendingAmount.signum() <= 0) {
-            sendResponse(player, false, "Aucun montant n'est en attente sur ce TPE.", "0");
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.no_pending"), "0");
             return;
         }
         BigDecimal expected = Money.parsePositive(packet.expectedAmount).orElse(null);
         if (expected == null || expected.compareTo(pendingAmount) != 0) {
-            sendResponse(player, false, "Le montant a change. Verifiez-le puis validez a nouveau.", pendingText);
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.amount_changed"), pendingText);
             return;
         }
         OptionalInt companyId = BankManager.parseCompanyId(tpe.getCompanyId());
         if (companyId.isEmpty()) {
-            sendResponse(player, false, "Compte entreprise introuvable.", pendingText);
+            sendResponse(player, false, Msg.of(Msg.PREFIX + "tpe.company_account_missing"), pendingText);
             return;
         }
 
@@ -97,7 +98,7 @@ public class TpePaymentPacket {
             tpe.setPendingAmount(BigDecimal.ZERO);
             tpeMenu.setPinValidated(false);
             player.level().sendBlockUpdated(packet.pos, tpe.getBlockState(), tpe.getBlockState(), 3);
-            sendResponse(player, true, "Paiement effectue.", "0");
+            sendResponse(player, true, Msg.of(Msg.PREFIX + "tpe.paid"), "0");
         });
     }
 

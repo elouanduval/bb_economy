@@ -1,5 +1,6 @@
 package org.bb.bb_economy.gui;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -96,8 +97,8 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
         addRenderableWidget(next);
 
         int y = navY + 24;
-        quantityField = new EditBox(this.font, cx - 100, y, 50, 18, Component.literal("Nombre de lots"));
-        quantityField.setHint(Component.literal("Lots"));
+        quantityField = new EditBox(this.font, cx - 100, y, 50, 18, Component.translatable(Msg.PREFIX + "gui.lots_label"));
+        quantityField.setHint(Component.translatable(Msg.PREFIX + "gui.lots"));
         quantityField.setMaxLength(4);
         quantityField.setFilter(text -> text.chars().allMatch(Character::isDigit));
         quantityField.setValue(lastQuantity);
@@ -110,12 +111,12 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
 
         pinField = null;
         if (payment == ShopManager.Payment.CARD && !pinValidated) {
-            pinField = new EditBox(this.font, cx - 100, y, 90, 18, Component.literal("PIN"));
-            pinField.setHint(Component.literal("PIN (4 chiffres)"));
+            pinField = new EditBox(this.font, cx - 100, y, 90, 18, Component.translatable(Msg.PREFIX + "gui.pin"));
+            pinField.setHint(Component.translatable(Msg.PREFIX + "gui.pin_hint"));
             pinField.setMaxLength(4);
             pinField.setFilter(text -> text.chars().allMatch(Character::isDigit));
             addRenderableWidget(pinField);
-            addRenderableWidget(Button.builder(Component.literal("Valider le PIN"), btn -> sendPin())
+            addRenderableWidget(Button.builder(Component.translatable(Msg.PREFIX + "gui.validate_pin"), btn -> sendPin())
                     .pos(cx - 4, y).size(134, 18).build());
             y += 24;
         }
@@ -125,7 +126,7 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
     }
 
     private String rowLabel(ShopCatalog.Offer offer) {
-        String verb = offer.direction() == ShopCatalog.Direction.PLAYER_SELLS ? "Vendre" : "Acheter";
+        String verb = offer.direction() == ShopCatalog.Direction.PLAYER_SELLS ? Msg.tr("gui.sell") : Msg.tr("gui.buy");
         return verb + " " + offer.bundleSize() + " x " + itemName(offer) + " : " + offer.bundlePrice().toPlainString() + " " + Money.CURRENCY;
     }
 
@@ -136,19 +137,19 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
     }
 
     private Component paymentLabel() {
-        return Component.literal("Paiement : " + (payment == ShopManager.Payment.CASH ? "liquide (billets)" : "carte"));
+        return Component.translatable(Msg.PREFIX + "gui.payment", Msg.tr(payment == ShopManager.Payment.CASH ? "gui.payment_cash" : "gui.payment_card"));
     }
 
     private String confirmLabel() {
         if (selected < 0 || selected >= offers().size()) {
-            return "Choisissez une offre";
+            return Msg.tr("gui.choose_offer");
         }
-        return offers().get(selected).direction() == ShopCatalog.Direction.PLAYER_SELLS ? "Confirmer la vente" : "Confirmer l'achat";
+        return offers().get(selected).direction() == ShopCatalog.Direction.PLAYER_SELLS ? Msg.tr("gui.confirm_sale") : Msg.tr("gui.confirm_purchase");
     }
 
     private void select(int index) {
         selected = index;
-        setMessage("Offre choisie : " + rowLabel(offers().get(index)), 0xFFFFFF);
+        setMessage(Msg.of(Msg.PREFIX + "gui.offer_chosen", rowLabel(offers().get(index))), 0xFFFFFF);
         rebuild();
     }
 
@@ -170,11 +171,11 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
     private void sendPin() {
         String text = pinField == null ? "" : pinField.getValue();
         if (text.length() != 4) {
-            setMessage("Le PIN doit contenir 4 chiffres.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "pin.four_digits"), 0xFF4444);
             return;
         }
         ModNetworking.CHANNEL.sendToServer(new PinCheckPacket(Integer.parseInt(text)));
-        setMessage("Verification...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.checking"), 0xAAAAAA);
     }
 
     private int quantity() {
@@ -187,25 +188,25 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
 
     private void confirm() {
         if (selected < 0 || selected >= offers().size()) {
-            setMessage("Choisissez d'abord une offre.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "gui.choose_offer_first"), 0xFF4444);
             return;
         }
         int quantity = quantity();
         if (quantity < 1 || quantity > ShopManager.MAX_QUANTITY) {
-            setMessage("Nombre de lots invalide (de 1 a " + ShopManager.MAX_QUANTITY + ").", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "shop.invalid_lots", ShopManager.MAX_QUANTITY), 0xFF4444);
             return;
         }
         if (payment == ShopManager.Payment.CARD && !pinValidated) {
-            setMessage("Validez d'abord votre PIN.", 0xFF4444);
+            setMessage(Msg.of(Msg.PREFIX + "shop.pin_first"), 0xFF4444);
             return;
         }
         ModNetworking.CHANNEL.sendToServer(new ShopTradePacket(offers().get(selected).id(), quantity, payment));
-        setMessage("Traitement...", 0xAAAAAA);
+        setMessage(Msg.of(Msg.PREFIX + "gui.processing"), 0xAAAAAA);
     }
 
     public void onPinResponse(boolean success, String responseMessage) {
         pinValidated = success;
-        setMessage(success ? "PIN valide. Vous pouvez payer par carte." : responseMessage, success ? 0x44FF44 : 0xFF4444);
+        setMessage(success ? Msg.of(Msg.PREFIX + "gui.pin_ok_card") : responseMessage, success ? 0x44FF44 : 0xFF4444);
         rebuild();
     }
 
@@ -214,7 +215,7 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
     }
 
     private void setMessage(String text, int color) {
-        message = Component.literal(text);
+        message = Msg.component(text);
         messageColor = color;
     }
 
@@ -231,11 +232,11 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
         g.fill(x, y, x + 1, y + FRAME_HEIGHT, 0xFF505050);
         g.fill(x + FRAME_WIDTH - 1, y, x + FRAME_WIDTH, y + FRAME_HEIGHT, 0xFF505050);
 
-        String title = "Boutique - " + handler.getCompanyName();
+        String title = Msg.tr("gui.shop_title", handler.getCompanyName());
         g.drawString(this.font, title, cx - this.font.width(title) / 2, y + 8, 0xEAEAEA, false);
 
         if (offers().isEmpty()) {
-            String empty = "Aucune offre disponible pour le moment.";
+            String empty = Msg.tr("gui.no_offers");
             g.drawString(this.font, empty, cx - this.font.width(empty) / 2, top() + 40, 0xAAAAAA, false);
         }
 
@@ -250,15 +251,15 @@ public class ShopScreen extends Screen implements MenuAccess<ShopScreenHandler> 
             }
         }
 
-        String pageLabel = "Page " + (page + 1) + "/" + pageCount();
+        String pageLabel = Msg.tr("gui.page", page + 1, pageCount());
         g.drawString(this.font, pageLabel, cx + 5 - this.font.width(pageLabel) / 2, top() + ROWS_PER_PAGE * 22 + 7, 0xAAAAAA, false);
 
         if (selected >= 0 && selected < offers().size()) {
             ShopCatalog.Offer chosen = offers().get(selected);
             int lots = Math.max(quantity(), 0);
             BigDecimal total = chosen.bundlePrice().multiply(BigDecimal.valueOf(lots));
-            String totalLabel = "Total : " + (long) lots * chosen.bundleSize() + " objets pour "
-                    + total.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString() + " " + Money.CURRENCY;
+            String totalLabel = Msg.tr("gui.total", (long) lots * chosen.bundleSize(),
+                    total.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString() + " " + Money.CURRENCY);
             g.drawString(this.font, totalLabel, cx - 100, y + FRAME_HEIGHT - 38, 0xB8D8B8, false);
         }
 

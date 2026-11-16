@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraftforge.network.NetworkEvent;
@@ -39,7 +40,7 @@ public class ShopTradePacket {
                 return;
             }
             if (!(player.containerMenu instanceof ShopScreenHandler shop) || !shop.stillValid(player)) {
-                sendResponse(player, false, "Session de boutique invalide.");
+                sendResponse(player, false, Msg.of(Msg.PREFIX + "shop.invalid_session"));
                 return;
             }
             // L'offre est relue en base et verifiee contre l'entreprise de CE bloc : le client ne choisit que

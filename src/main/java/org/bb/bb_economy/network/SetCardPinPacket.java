@@ -1,5 +1,6 @@
 package org.bb.bb_economy.network;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -32,11 +33,11 @@ public class SetCardPinPacket {
             if (player == null) return;
 
             if (!BankManager.isValidPin(packet.pin)) {
-                sendResponse(player, false, "Le PIN doit contenir exactement 4 chiffres.");
+                sendResponse(player, false, Msg.of(Msg.PREFIX + "pin.four_digits"));
                 return;
             }
             if (BankManager.isDefaultPin(packet.pin)) {
-                sendResponse(player, false, "Ce PIN est reserve. Choisissez-en un autre.");
+                sendResponse(player, false, Msg.of(Msg.PREFIX + "pin.reserved"));
                 return;
             }
 
@@ -44,8 +45,8 @@ public class SetCardPinPacket {
                 // Change le PIN de la carte du joueur a l'ATM (deja authentifiee), a tout moment : pas seulement
                 // quand le PIN est encore celui par defaut.
                 BankManager.updateCardPinByNumber(player, atmMenu.getCardNumber(), packet.pin, success -> {
-                    String message = success ? "Le PIN de cette carte a ete change." : "Impossible de changer le PIN.";
-                    if (success) player.displayClientMessage(Component.literal(message), false);
+                    String message = success ? Msg.of(Msg.PREFIX + "pin.changed") : Msg.of(Msg.PREFIX + "pin.change_failed");
+                    if (success) player.displayClientMessage(Msg.component(message), false);
                     sendResponse(player, success, message);
                 });
                 return;
@@ -54,12 +55,12 @@ public class SetCardPinPacket {
             BankManager.initPersonalPin(player, packet.pin, outcome -> {
                 boolean success = outcome == BankManager.InitPinResult.SAVED;
                 String message = switch (outcome) {
-                    case SAVED -> "Votre code PIN a ete enregistre.";
-                    case FAILED -> "Impossible d'enregistrer le PIN.";
-                    case NOT_REQUIRED -> "Aucune initialisation de PIN n'est requise actuellement.";
-                    case ERROR -> "Service bancaire indisponible. Reessayez plus tard.";
+                    case SAVED -> Msg.of(Msg.PREFIX + "pin.saved");
+                    case FAILED -> Msg.of(Msg.PREFIX + "pin.save_failed");
+                    case NOT_REQUIRED -> Msg.of(Msg.PREFIX + "pin.not_required");
+                    case ERROR -> Msg.of(Msg.PREFIX + "tx.service_unavailable");
                 };
-                if (success) player.displayClientMessage(Component.literal(message), false);
+                if (success) player.displayClientMessage(Msg.component(message), false);
                 sendResponse(player, success, message);
             });
         });

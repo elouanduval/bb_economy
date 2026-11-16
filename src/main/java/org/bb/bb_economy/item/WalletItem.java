@@ -1,5 +1,6 @@
 package org.bb.bb_economy.item;
 
+import org.bb.bb_economy.Msg;
 import net.minecraft.ChatFormatting;
 import net.minecraft.network.chat.Component;
 import net.minecraft.world.InteractionHand;
@@ -35,18 +36,18 @@ public class WalletItem extends Item {
         if (player.isShiftKeyDown()) {
             int extracted = withdrawMoney(player, wallet);
             if (extracted > 0) {
-                player.displayClientMessage(Component.literal(extracted + " billet(s) retire(s) du portefeuille."), true);
+                player.displayClientMessage(Component.translatable(Msg.PREFIX + "wallet.withdrawn", extracted), true);
             } else {
-                player.displayClientMessage(Component.literal("Le portefeuille est vide."), true);
+                player.displayClientMessage(Component.translatable(Msg.PREFIX + "wallet.empty"), true);
             }
             return InteractionResultHolder.sidedSuccess(wallet, false);
         }
 
         int stored = depositMoney(player, wallet);
         if (stored > 0) {
-            player.displayClientMessage(Component.literal(stored + " billet(s) range(s) dans le portefeuille."), true);
+            player.displayClientMessage(Component.translatable(Msg.PREFIX + "wallet.stored", stored), true);
         } else {
-            player.displayClientMessage(Component.literal("Aucun billet a ranger."), true);
+            player.displayClientMessage(Component.translatable(Msg.PREFIX + "wallet.nothing_to_store"), true);
         }
         return InteractionResultHolder.sidedSuccess(wallet, false);
     }
@@ -54,9 +55,9 @@ public class WalletItem extends Item {
     @Override
     public void appendHoverText(ItemStack stack, @Nullable Level level, List<Component> tooltip, TooltipFlag flag) {
         super.appendHoverText(stack, level, tooltip, flag);
-        tooltip.add(Component.literal("Billets : " + getStoredMoney(stack) + " / " + getMaxStoredMoney()).withStyle(ChatFormatting.GRAY));
-        tooltip.add(Component.literal("Clic droit : ranger les billets").withStyle(ChatFormatting.DARK_GRAY));
-        tooltip.add(Component.literal("Sneak + clic droit : retirer des billets").withStyle(ChatFormatting.DARK_GRAY));
+        tooltip.add(Component.translatable(Msg.PREFIX + "wallet.tooltip.bills", getStoredMoney(stack), getMaxStoredMoney()).withStyle(ChatFormatting.GRAY));
+        tooltip.add(Component.translatable(Msg.PREFIX + "wallet.tooltip.store").withStyle(ChatFormatting.DARK_GRAY));
+        tooltip.add(Component.translatable(Msg.PREFIX + "wallet.tooltip.withdraw").withStyle(ChatFormatting.DARK_GRAY));
     }
 
     public static int getStoredMoney(ItemStack stack) {

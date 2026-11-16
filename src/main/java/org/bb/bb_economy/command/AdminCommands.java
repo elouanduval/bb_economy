@@ -16,6 +16,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
+import org.bb.bb_economy.Msg;
 import org.bb.bb_economy.database.BankLedger;
 import org.bb.bb_economy.database.BankManager;
 import org.bb.bb_economy.database.Money;
@@ -311,7 +312,7 @@ public final class AdminCommands {
                     ? BankManager.adminCredit(target.accountNumber(), amount, src.getServer())
                     : BankManager.adminDebit(target.accountNumber(), amount, src.getServer());
             if (!result.isOk()) {
-                src.sendFailure(Component.literal((credit ? "Credit" : "Debit") + " refuse : " + result.message()));
+                src.sendFailure(Component.literal((credit ? "Credit" : "Debit") + " refuse : ").append(Msg.component(result.message())));
                 return 0;
             }
             String balance = BankManager.accountInfo(target.accountNumber())
