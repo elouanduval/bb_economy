@@ -46,7 +46,8 @@ public class BB_Economy {
         ModMenus.MENUS.register(modEventBus);
         ModNetworking.register();
 
-        ModLoadingContext.get().registerConfig(ModConfig.Type.SERVER, Config.SPEC);
+        // COMMON et non SERVER : le fichier est dans config/ (facile a trouver), pas dans le dossier du monde.
+        ModLoadingContext.get().registerConfig(ModConfig.Type.COMMON, Config.SPEC, "bb_economy.toml");
 
         MinecraftForge.EVENT_BUS.register(new ForgeEvents());
 
