@@ -46,7 +46,7 @@ Pour lancer un serveur de développement : `./gradlew runServer`.
 
 ## Configuration
 
-Fichier de configuration serveur du mod, créé au premier lancement dans `serverconfig/bb_economy-server.toml` du dossier du monde.
+Fichier de configuration du mod, créé au premier lancement dans `config/bb_economy.toml` (dossier du serveur). Les valeurs sont lues au démarrage : redémarrer le serveur après une modification.
 
 | Clé | Défaut | Rôle |
 |---|---|---|
