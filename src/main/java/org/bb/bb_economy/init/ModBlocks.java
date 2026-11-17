@@ -3,6 +3,7 @@ package org.bb.bb_economy.init;
 import net.minecraft.world.item.BlockItem;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.SoundType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraftforge.eventbus.api.IEventBus;
 import net.minecraftforge.registries.DeferredRegister;
@@ -32,7 +33,7 @@ public class ModBlocks {
             () -> new TpeItem(TPE_BLOCK.get(), new Item.Properties()));
 
     public static final RegistryObject<Block> SHOP_BLOCK = BLOCKS.register("shop",
-            () -> new ShopBlock(BlockBehaviour.Properties.of().strength(2.5f)));
+            () -> new ShopBlock(BlockBehaviour.Properties.of().strength(2.5f).sound(SoundType.WOOD).noOcclusion()));
 
     public static final RegistryObject<Item> SHOP_BLOCK_ITEM = ITEMS.register("shop",
             () -> new ShopItem(SHOP_BLOCK.get(), new Item.Properties()));

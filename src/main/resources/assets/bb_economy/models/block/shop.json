@@ -1,6 +1,50 @@
 {
-  "parent": "minecraft:block/cube_all",
+  "credit": "Etal de boutique genere pour bb_economy (textures de base de Minecraft)",
+  "parent": "minecraft:block/block",
   "textures": {
-    "all": "bb_economy:block/sides"
-  }
+    "particle": "minecraft:block/spruce_planks",
+    "planks": "minecraft:block/spruce_planks",
+    "top": "minecraft:block/dark_oak_planks",
+    "floor": "minecraft:block/oak_planks",
+    "log": "minecraft:block/stripped_spruce_log",
+    "log_top": "minecraft:block/stripped_spruce_log_top",
+    "shelf": "minecraft:block/bookshelf",
+    "red": "minecraft:block/red_wool",
+    "white": "minecraft:block/white_wool",
+    "crate_side": "minecraft:block/barrel_side",
+    "crate_top": "minecraft:block/barrel_top",
+    "melon_side": "minecraft:block/melon_side",
+    "melon_top": "minecraft:block/melon_top",
+    "gold": "minecraft:block/gold_block"
+  },
+  "elements": [
+    {"name": "sol", "from": [0, 0, 0], "to": [16, 1, 16], "faces": {"north": {"texture": "#floor"}, "east": {"texture": "#floor"}, "south": {"texture": "#floor"}, "west": {"texture": "#floor"}, "up": {"texture": "#floor"}, "down": {"texture": "#floor"}}},
+    {"name": "comptoir", "from": [0.5, 1, 1], "to": [15.5, 9, 7], "faces": {"north": {"texture": "#planks"}, "east": {"texture": "#planks"}, "south": {"texture": "#planks"}, "west": {"texture": "#planks"}, "up": {"texture": "#planks"}, "down": {"texture": "#planks"}}},
+    {"name": "plateau", "from": [0, 9, 0], "to": [16, 10, 8], "faces": {"north": {"texture": "#top"}, "east": {"texture": "#top"}, "south": {"texture": "#top"}, "west": {"texture": "#top"}, "up": {"texture": "#top"}, "down": {"texture": "#top"}}},
+    {"name": "poteau_av_g", "from": [0, 1, 0], "to": [2, 13, 2], "faces": {"north": {"texture": "#log"}, "east": {"texture": "#log"}, "south": {"texture": "#log"}, "west": {"texture": "#log"}, "up": {"texture": "#log_top"}, "down": {"texture": "#log_top"}}},
+    {"name": "poteau_av_d", "from": [14, 1, 0], "to": [16, 13, 2], "faces": {"north": {"texture": "#log"}, "east": {"texture": "#log"}, "south": {"texture": "#log"}, "west": {"texture": "#log"}, "up": {"texture": "#log_top"}, "down": {"texture": "#log_top"}}},
+    {"name": "poteau_ar_g", "from": [0, 1, 14], "to": [2, 15, 16], "faces": {"north": {"texture": "#log"}, "east": {"texture": "#log"}, "south": {"texture": "#log"}, "west": {"texture": "#log"}, "up": {"texture": "#log_top"}, "down": {"texture": "#log_top"}}},
+    {"name": "poteau_ar_d", "from": [14, 1, 14], "to": [16, 15, 16], "faces": {"north": {"texture": "#log"}, "east": {"texture": "#log"}, "south": {"texture": "#log"}, "west": {"texture": "#log"}, "up": {"texture": "#log_top"}, "down": {"texture": "#log_top"}}},
+    {"name": "etagere", "from": [2, 1, 13], "to": [14, 8, 16], "faces": {"north": {"texture": "#shelf"}, "east": {"texture": "#shelf"}, "south": {"texture": "#shelf"}, "west": {"texture": "#shelf"}, "up": {"texture": "#floor"}, "down": {"texture": "#floor"}}},
+    {"name": "toit_a_0", "from": [-1, 13, -2], "to": [3.5, 14, 4], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "toit_b_0", "from": [-1, 14, 4], "to": [3.5, 15, 10], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "toit_c_0", "from": [-1, 15, 10], "to": [3.5, 16, 17], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "lambrequin_0", "from": [-1, 11.5, -2], "to": [3.5, 13, -1.5], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "toit_a_1", "from": [3.5, 13, -2], "to": [8, 14, 4], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "toit_b_1", "from": [3.5, 14, 4], "to": [8, 15, 10], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "toit_c_1", "from": [3.5, 15, 10], "to": [8, 16, 17], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "lambrequin_1", "from": [3.5, 11.5, -2], "to": [8, 13, -1.5], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "toit_a_2", "from": [8, 13, -2], "to": [12.5, 14, 4], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "toit_b_2", "from": [8, 14, 4], "to": [12.5, 15, 10], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "toit_c_2", "from": [8, 15, 10], "to": [12.5, 16, 17], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "lambrequin_2", "from": [8, 11.5, -2], "to": [12.5, 13, -1.5], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "toit_a_3", "from": [12.5, 13, -2], "to": [17, 14, 4], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "toit_b_3", "from": [12.5, 14, 4], "to": [17, 15, 10], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "toit_c_3", "from": [12.5, 15, 10], "to": [17, 16, 17], "faces": {"north": {"texture": "#white"}, "east": {"texture": "#white"}, "south": {"texture": "#white"}, "west": {"texture": "#white"}, "up": {"texture": "#white"}, "down": {"texture": "#white"}}},
+    {"name": "lambrequin_3", "from": [12.5, 11.5, -2], "to": [17, 13, -1.5], "faces": {"north": {"texture": "#red"}, "east": {"texture": "#red"}, "south": {"texture": "#red"}, "west": {"texture": "#red"}, "up": {"texture": "#red"}, "down": {"texture": "#red"}}},
+    {"name": "caisse", "from": [10, 10, 3], "to": [14, 12, 7], "faces": {"north": {"texture": "#crate_side"}, "east": {"texture": "#crate_side"}, "south": {"texture": "#crate_side"}, "west": {"texture": "#crate_side"}, "up": {"texture": "#crate_top"}, "down": {"texture": "#crate_top"}}},
+    {"name": "melon", "from": [2.5, 10, 3], "to": [5.5, 12.5, 6], "faces": {"north": {"texture": "#melon_side"}, "east": {"texture": "#melon_side"}, "south": {"texture": "#melon_side"}, "west": {"texture": "#melon_side"}, "up": {"texture": "#melon_top"}, "down": {"texture": "#melon_top"}}},
+    {"name": "enseigne", "from": [5, 3, 0.4], "to": [11, 8, 1], "faces": {"north": {"texture": "#top"}, "east": {"texture": "#top"}, "south": {"texture": "#top"}, "west": {"texture": "#top"}, "up": {"texture": "#top"}, "down": {"texture": "#top"}}},
+    {"name": "piece", "from": [7, 4.5, 0.2], "to": [9, 6.5, 0.4], "faces": {"north": {"texture": "#gold"}, "east": {"texture": "#gold"}, "south": {"texture": "#gold"}, "west": {"texture": "#gold"}, "up": {"texture": "#gold"}, "down": {"texture": "#gold"}}}
+  ]
 }

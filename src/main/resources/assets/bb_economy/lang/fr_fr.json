@@ -6,6 +6,7 @@
   "block.bb_economy.atm": "Distributeur BB",
   "block.bb_economy.tpe": "TPE BB",
   "block.bb_economy.shop": "Boutique BB",
+  "itemGroup.bb_economy": "BB Économie",
 
   "bb_economy.item.company": "Entreprise : %s",
   "bb_economy.item.account": "Compte : %s",

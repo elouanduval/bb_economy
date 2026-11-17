@@ -22,6 +22,7 @@ import org.bb.bb_economy.database.DatabaseManager;
 import org.bb.bb_economy.database.DbExecutor;
 import org.bb.bb_economy.init.ModBlockEntities;
 import org.bb.bb_economy.init.ModBlocks;
+import org.bb.bb_economy.init.ModCreativeTabs;
 import org.bb.bb_economy.init.ModItems;
 import org.bb.bb_economy.init.ModMenus;
 import org.bb.bb_economy.init.ModNetworking;
@@ -41,6 +42,7 @@ public class BB_Economy {
         IEventBus modEventBus = FMLJavaModLoadingContext.get().getModEventBus();
 
         ModItems.register(modEventBus);
+        ModCreativeTabs.register(modEventBus);
         ModBlocks.register(modEventBus);
         ModBlockEntities.register(modEventBus);
         ModMenus.MENUS.register(modEventBus);
