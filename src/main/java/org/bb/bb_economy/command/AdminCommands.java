@@ -13,7 +13,10 @@ import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.arguments.EntityArgument;
 import net.minecraft.commands.arguments.ResourceLocationArgument;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.ChatFormatting;
+import net.minecraft.network.chat.ClickEvent;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import org.bb.bb_economy.Msg;
@@ -362,11 +365,56 @@ public final class AdminCommands {
     // -------------------------------------------------------------------------
 
     private static int showHelp(CommandSourceStack source) {
-        source.sendSuccess(() -> Component.literal("BB Economy - Commandes administrateur :"), false);
-        for (String command : HELP) {
-            source.sendSuccess(() -> Component.literal(command.startsWith("---") ? command : " - " + command), false);
+        source.sendSuccess(() -> Component.literal("BB Economy").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                .append(Component.literal(" - Commandes administrateur").withStyle(ChatFormatting.GRAY)), false);
+        source.sendSuccess(() -> Component.literal("Cliquez sur une commande pour la saisir dans le chat.")
+                .withStyle(ChatFormatting.DARK_GRAY, ChatFormatting.ITALIC), false);
+        for (String line : HELP) {
+            MutableComponent formatted = formatHelpLine(line);
+            source.sendSuccess(() -> formatted, false);
         }
         return 1;
+    }
+
+    /**
+     * Mise en forme d'une ligne d'aide : titre de section en or, commande en jaune, arguments en cyan
+     * ({@code <obligatoire>}) ou cyan fonce ({@code [facultatif]}), description en gris. Un clic sur la commande
+     * la saisit dans le chat, jusqu'au premier argument.
+     */
+    static MutableComponent formatHelpLine(String line) {
+        if (line.startsWith("---")) {
+            String title = line.replaceAll("^-+\\s*|\\s*-+$", "");
+            return Component.literal("▶ " + title).withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD);
+        }
+
+        int separator = line.indexOf(" - ");
+        String command = separator < 0 ? line : line.substring(0, separator);
+        String description = separator < 0 ? "" : line.substring(separator + 3);
+
+        MutableComponent commandText = Component.empty();
+        StringBuilder typed = new StringBuilder();
+        boolean argumentsStarted = false;
+        for (String token : command.split(" ")) {
+            boolean required = token.startsWith("<");
+            boolean optional = token.startsWith("[");
+            if (required || optional) {
+                argumentsStarted = true;
+            }
+            if (!argumentsStarted) {
+                typed.append(token).append(' ');
+            }
+            ChatFormatting color = required ? ChatFormatting.AQUA : optional ? ChatFormatting.DARK_AQUA : ChatFormatting.YELLOW;
+            commandText.append(Component.literal(token + " ").withStyle(color));
+        }
+        String suggestion = typed.toString();
+        commandText.withStyle(style -> style.withClickEvent(new ClickEvent(ClickEvent.Action.SUGGEST_COMMAND, suggestion)));
+
+        MutableComponent result = Component.literal(" ").append(commandText);
+        if (!description.isEmpty()) {
+            result.append(Component.literal("- ").withStyle(ChatFormatting.DARK_GRAY))
+                    .append(Component.literal(description).withStyle(ChatFormatting.GRAY));
+        }
+        return result;
     }
 
     private static int regivePlayerCard(CommandSourceStack source, ServerPlayer target) {

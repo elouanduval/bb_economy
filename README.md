@@ -83,17 +83,30 @@ Notes :
 - Une entreprise ne peut pas être supprimée tant qu'elle a un compte bancaire (clé étrangère protégée).
 - Une ancienne table `bb_companies` créée par une version précédente de ce mod est renommée en `bb_companies_legacy` au démarrage, sans rien supprimer. La table `bb_jobs` éventuelle n'est plus utilisée.
 
-## Utilisation en jeu
+## Démarrage rapide (administrateur)
 
-**Joueur**
+Les commandes demandent d'être opérateur (`/op <pseudo>`). L'ordre compte : **sans compte bancaire, un joueur ne peut rien faire** avec l'ATM, le TPE ou les boutiques.
 
-1. Un administrateur crée son compte (`/bb_economy bank create`) : il reçoit sa carte et choisit son PIN.
-2. À l'ATM, tenir sa carte en main et faire un clic droit. Entrer le PIN, puis déposer, retirer, virer ou changer son PIN.
-3. Au TPE d'une entreprise, tenir sa carte en main, entrer le PIN, valider le montant affiché.
+1. **Le joueur doit avoir un profil RP actif** (géré par le mod d'identité, tables `profiles` et `mc_accounts`). Sans profil, la création du compte échoue.
+2. **Créer son compte bancaire** : `/bb_economy bank create <joueur>`.
+   Le joueur reçoit sa carte (et un portefeuille selon la config), son compte est crédité du solde de départ, et l'écran de choix du PIN s'ouvre. S'il le ferme sans choisir, il lui est reproposé à sa prochaine connexion.
+3. **Le joueur choisit son PIN** : 4 chiffres, et pas `0000` (c'est le PIN provisoire).
+4. **Poser un ATM** : `/give <joueur> bb_economy:atm`, puis poser le bloc. Le joueur tient sa **carte en main** et fait un clic droit dessus.
+5. **Les entreprises** sont créées dans le plugin des entreprises. Côté argent, ouvrir leur compte : `/bb_economy company open_all_accounts` (ou `company open_account <entreprise>`). Un compte s'ouvre aussi tout seul au premier paiement TPE.
+6. **Équiper un commerce** :
+   - un TPE : `/bb_economy give tpe <entreprise>`, puis le poser ;
+   - une boutique automatique : voir [Boutiques automatiques](#boutiques-automatiques).
 
-**Patron d'une entreprise**
+Pour donner de l'argent de départ, `/bb_economy bank credit <joueur> <montant>`. Pour des billets en main, `/give <joueur> bb_economy:money <quantité>`.
 
-Après le PIN, l'ATM propose « Compte personnel » et le compte de chaque entreprise dont il est le patron (`owner_uuid`). Il dépose à l'ATM les recettes encaissées en liquide, et paie ses employés par virement depuis le compte de l'entreprise.
+## Utilisation en jeu (joueurs)
+
+- **ATM** : carte en main, clic droit sur le distributeur, entrer son PIN, puis déposer, retirer, virer vers un numéro de compte (`ACC-…`) ou changer son PIN. Les montants de dépôt et de retrait sont entiers (un billet vaut 1). Des plafonds journaliers s'appliquent.
+- **PIN** : après 3 essais ratés, le compte est verrouillé 5 minutes (réglable). Un administrateur peut lever le verrou.
+- **Billets et portefeuille** : clic droit avec le portefeuille pour ranger les billets de l'inventaire, accroupi + clic droit pour en retirer.
+- **TPE** : un **membre de l'entreprise** fait un clic droit sur le TPE, saisit le montant et valide. Le **client** fait ensuite un clic droit **carte en main**, entre son PIN et valide le paiement. L'argent va sur le compte de l'entreprise.
+- **Boutique automatique** : clic droit sur le bloc, choisir une offre et un nombre de lots, payer en liquide ou par carte.
+- **Patron d'une entreprise** : après le PIN, l'ATM propose « Compte personnel » ou le compte de chaque entreprise dont il est le patron. Il y dépose les recettes encaissées en liquide et paie ses employés par virement depuis le compte de l'entreprise.
 
 ## Commandes d'administration
 
@@ -118,6 +131,22 @@ Toutes demandent la permission de niveau 2. `/bb_economy help` les liste en jeu.
 | `shop remove\|enable\|disable <métier> <sell\|buy> [objet]` | Supprime, active ou désactive l'offre (objet tenu en main si omis) |
 
 Objets vanilla : `/give <joueur> bb_economy:money`, `bb_economy:wallet`, `bb_economy:atm`.
+
+Dans `/bb_economy help`, les commandes sont colorées (arguments obligatoires en cyan, facultatifs en cyan foncé) et un clic sur une commande la saisit dans le chat. `<cible>` désigne un joueur pour `bank` et une entreprise pour `company`.
+
+**Cas courants**
+
+| Situation | Commande |
+|---|---|
+| Un joueur n'a pas de compte | `bank create <joueur>` |
+| Carte perdue, volée ou dupliquée | `bank reissue_card <joueur>` : nouveau numéro, l'ancienne carte ne marche plus, PIN remis à zéro |
+| Le joueur a perdu l'objet mais pas la carte en base | `card regive <joueur>` |
+| PIN bloqué après trop d'essais | `bank unlock <joueur>` |
+| Corriger un solde | `bank credit <joueur> <montant>` ou `bank debit …` (tracé dans le grand livre) |
+| Voir le solde, le numéro de compte | `bank info <joueur>` ou `company info <entreprise>` |
+| Vérifier ce qui s'est passé | `bank history <joueur> [n]` |
+| Bloquer un compte suspect | `bank freeze <joueur>` (il ne peut plus rien émettre mais peut recevoir), `unfreeze` pour lever |
+| Donner son numéro de compte d'entreprise pour un virement | `company info <entreprise>` |
 
 ## Boutiques automatiques
 
